@@ -1,0 +1,223 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  dev                                   |
+|   \\  /    A nd           | Web:      www.OpenFOAM.org                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      blockMeshDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+convertToMeters 0.01;
+
+vertices
+(
+    // downstream small channel, y = 0 to 5, x,z = -1 to 1
+    (-1 0 -1) // 0
+    ( 1 0 -1) // 1
+    ( 1 5 -1) // 2
+    (-1 5 -1) // 3
+
+    (-1 0  1) // 4
+    ( 1 0  1) // 5
+    ( 1 5  1) // 6
+    (-1 5  1) // 7
+
+    // y = 5 large-section plane
+    (-4 5 -4) // 8
+    (-1 5 -4) // 9
+    ( 1 5 -4) // 10
+    ( 4 5 -4) // 11
+
+    (-4 5 -1) // 12
+    ( 4 5 -1) // 13
+
+    (-4 5  1) // 14
+    ( 4 5  1) // 15
+
+    (-4 5  4) // 16
+    (-1 5  4) // 17
+    ( 1 5  4) // 18
+    ( 4 5  4) // 19
+
+    // y = 15 large-section plane
+    (-4 15 -4) // 20
+    (-1 15 -4) // 21
+    ( 1 15 -4) // 22
+    ( 4 15 -4) // 23
+
+    (-4 15 -1) // 24
+    (-1 15 -1) // 25
+    ( 1 15 -1) // 26
+    ( 4 15 -1) // 27
+
+    (-4 15  1) // 28
+    (-1 15  1) // 29
+    ( 1 15  1) // 30
+    ( 4 15  1) // 31
+
+    (-4 15  4) // 32
+    (-1 15  4) // 33
+    ( 1 15  4) // 34
+    ( 4 15  4) // 35
+);
+
+blocks
+(
+    // downstream small channel, y = 0 to 5
+    hex (0 1 2 3 4 5 6 7) (20 50 20) simpleGrading (1 1 1)
+
+    // upstream large channel, y = 5 to 15
+    // These 9 blocks are assigned to cellZone "largeReservoir"
+
+    // z = -4 to -1
+    hex (8 9 21 20 12 3 25 24) largeReservoir (30 100 30) simpleGrading (1 1 1)
+
+    hex (9 10 22 21 3 2 26 25) largeReservoir (20 100 30) simpleGrading (1 1 1)
+
+    hex (10 11 23 22 2 13 27 26) largeReservoir (30 100 30) simpleGrading (1 1 1)
+
+    // z = -1 to 1
+    hex (12 3 25 24 14 7 29 28) largeReservoir (30 100 20) simpleGrading (1 1 1)
+
+    hex (3 2 26 25 7 6 30 29) largeReservoir (20 100 20) simpleGrading (1 1 1)
+
+    hex (2 13 27 26 6 15 31 30) largeReservoir (30 100 20) simpleGrading (1 1 1)
+
+    // z = 1 to 4
+    hex (14 7 29 28 16 17 33 32) largeReservoir (30 100 30) simpleGrading (1 1 1)
+
+    hex (7 6 30 29 17 18 34 33) largeReservoir (20 100 30) simpleGrading (1 1 1)
+
+    hex (6 15 31 30 18 19 35 34) largeReservoir (30 100 30) simpleGrading (1 1 1)
+);
+
+edges
+(
+);
+
+boundary
+(
+    bottomWall
+    {
+        type patch;
+        faces
+        (
+            // y = 0, small channel bottom
+            (0 4 5 1)
+        );
+    }
+
+    topOpen
+    {
+        type wall;
+        faces
+        (
+            // y = 15, large channel top
+
+            (21 20 24 25)
+            (22 21 25 26)
+            (23 22 26 27)
+
+            (25 24 28 29)
+            (26 25 29 30)
+            (27 26 30 31)
+
+            (29 28 32 33)
+            (30 29 33 34)
+            (31 30 34 35)
+        );
+    }
+
+    contractionWall
+    {
+        type wall;
+        faces
+        (
+            // y = 5 shoulder wall, excluding central 2 x 2 opening
+
+            (9 3 12 8)
+            (10 2 3 9)
+            (11 13 2 10)
+
+            (3 7 14 12)
+            (13 15 6 2)
+
+            (7 17 16 14)
+            (6 18 17 7)
+            (15 19 18 6)
+        );
+    }
+
+    xMinWall
+    {
+        type wall;
+        faces
+        (
+            // downstream small channel
+            (0 4 7 3)
+
+            // upstream large channel
+            (8 12 24 20)
+            (12 14 28 24)
+            (14 16 32 28)
+        );
+    }
+
+    xMaxWall
+    {
+        type wall;
+        faces
+        (
+            // downstream small channel
+            (2 6 5 1)
+
+            // upstream large channel
+            (23 27 13 11)
+            (27 31 15 13)
+            (31 35 19 15)
+        );
+    }
+
+    zMinWall
+    {
+        type wall;
+        faces
+        (
+            // downstream small channel
+            (0 3 2 1)
+
+            // upstream large channel
+            (8 20 21 9)
+            (9 21 22 10)
+            (10 22 23 11)
+        );
+    }
+
+    zMaxWall
+    {
+        type wall;
+        faces
+        (
+            // downstream small channel
+            (4 5 6 7)
+
+            // upstream large channel
+            (16 17 33 32)
+            (17 18 34 33)
+            (18 19 35 34)
+        );
+    }
+);
+
+mergePatchPairs
+(
+);
+
+// ************************************************************************* //

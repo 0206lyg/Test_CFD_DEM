@@ -1,0 +1,75 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  4.1                                   |
+|   \\  /    A nd           | Web:      www.OpenFOAM.org                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      topoSetDict;
+}
+
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+actions
+(
+    // ------------------------------------------------------------
+    // Top faceZone: topOpen patch at y = 0.15
+    // ------------------------------------------------------------
+
+    {
+        name    reservoirTopFaces;
+        type    faceSet;
+        action  new;
+        source  patchToFace;
+        sourceInfo
+        {
+            name topOpen;
+        }
+    }
+
+    {
+        name    reservoirTop;
+        type    faceZoneSet;
+        action  new;
+        source  setToFaceZone;
+        sourceInfo
+        {
+            set reservoirTopFaces;
+        }
+    }
+
+    // ------------------------------------------------------------
+    // Bottom faceZone: whole y = 0.05 plane of large reservoir
+    // Includes contractionWall faces and central internal opening face.
+    // ------------------------------------------------------------
+
+    {
+        name    reservoirBottomFaces;
+        type    faceSet;
+        action  new;
+        source  boxToFace;
+        sourceInfo
+        {
+            box (-0.040001 0.049999 -0.040001)
+                ( 0.040001 0.050001  0.040001);
+        }
+    }
+
+    {
+        name    reservoirBottom;
+        type    faceZoneSet;
+        action  new;
+        source  setToFaceZone;
+        sourceInfo
+        {
+            set reservoirBottomFaces;
+        }
+    }
+);
+
+// ************************************************************************* //

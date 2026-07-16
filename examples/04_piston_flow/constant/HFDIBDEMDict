@@ -1,0 +1,305 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  3.0.x                                 |
+|   \\  /    A nd           | Web:      www.OpenFOAM.org                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "constant";
+    object      HFDIBDEMDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+bodyNames ( "PH_SC_reservoir" );
+
+interpolationSchemes
+{
+  //~ U cellPointFace;
+  U cell;
+}
+
+surfaceThreshold    1e-4;
+stepDEM     0.01;
+geometricD (1 1 1);
+recordSimulation true;
+recordFirstTimeStep true;
+nSolidsInDomain 2000;       //Sets Upper Limit On Number Of Particles In Domain if not spcecified sets to 1000 by default
+
+
+outputSetup
+{
+    basic false;
+    iB  false;
+    DEM false;
+    addModel false;
+    parallelDEM false;
+}
+DEM
+{
+	LcCoeff 4.0;
+	// rotationModel chen2012;
+	// rotationModel mindlin1953
+
+    materials
+    {
+        particle
+        {
+            Y       5e7;
+            nu      0.5;
+            mu      0.5;
+            adhN    0;
+            eps     0.5;
+        }
+
+        wall
+        {
+            Y       5e7;
+            nu      0.5;
+            mu      0.5;
+            adhN    0;
+            eps     0.5;
+        }
+    }
+
+	cyclicPatches
+	{
+	} 
+	
+    collisionPatches
+    {
+        // ------------------------------------------------------------
+        // Downstream small channel walls
+        // y = 0 to 0.05
+        // x,z = -0.01 to 0.01
+        // ------------------------------------------------------------
+
+        xMin_small
+        {
+            material    wall;
+            nVec        (-1 0 0);
+            planePoint  (-0.01 0 0);
+
+            finitePatch true;
+            minBound    (-0.01 0.00 -0.01);
+            maxBound    (-0.01 0.05  0.01);
+            pad         1e-7;
+        }
+
+        xMax_small
+        {
+            material    wall;
+            nVec        (1 0 0);
+            planePoint  (0.01 0 0);
+
+            finitePatch true;
+            minBound    (0.01 0.00 -0.01);
+            maxBound    (0.01 0.05  0.01);
+            pad         1e-7;
+        }
+
+        zMin_small
+        {
+            material    wall;
+            nVec        (0 0 -1);
+            planePoint  (0 0 -0.01);
+
+            finitePatch true;
+            minBound    (-0.01 0.00 -0.01);
+            maxBound    ( 0.01 0.05 -0.01);
+            pad         1e-7;
+        }
+
+        zMax_small
+        {
+            material    wall;
+            nVec        (0 0 1);
+            planePoint  (0 0 0.01);
+
+            finitePatch true;
+            minBound    (-0.01 0.00 0.01);
+            maxBound    ( 0.01 0.05 0.01);
+            pad         1e-7;
+        }
+
+        // ------------------------------------------------------------
+        // Upstream large chamber walls
+        // y = 0.05 to 0.15
+        // x,z = -0.04 to 0.04
+        // ------------------------------------------------------------
+
+        xMin_large
+        {
+            material    wall;
+            nVec        (-1 0 0);
+            planePoint  (-0.04 0 0);
+
+            finitePatch true;
+            minBound    (-0.04 0.05 -0.04);
+            maxBound    (-0.04 0.15  0.04);
+            pad         1e-7;
+        }
+
+        xMax_large
+        {
+            material    wall;
+            nVec        (1 0 0);
+            planePoint  (0.04 0 0);
+
+            finitePatch true;
+            minBound    (0.04 0.05 -0.04);
+            maxBound    (0.04 0.15  0.04);
+            pad         1e-7;
+        }
+
+        zMin_large
+        {
+            material    wall;
+            nVec        (0 0 -1);
+            planePoint  (0 0 -0.04);
+
+            finitePatch true;
+            minBound    (-0.04 0.05 -0.04);
+            maxBound    ( 0.04 0.15 -0.04);
+            pad         1e-7;
+        }
+
+        zMax_large
+        {
+            material    wall;
+            nVec        (0 0 1);
+            planePoint  (0 0 0.04);
+
+            finitePatch true;
+            minBound    (-0.04 0.05 0.04);
+            maxBound    ( 0.04 0.15 0.04);
+            pad         1e-7;
+        }
+
+        // ------------------------------------------------------------
+        // Contraction shoulder at y = 0.005
+        // central opening is excluded
+        // opening x,z = -0.01 to 0.01
+        //
+        // nVec = (0 -1 0)
+        // upstream side y > 0.05 is inside
+        // penetration toward y < 0.05 through shoulder gives contact
+        // ------------------------------------------------------------
+
+        shoulder_zPlus
+        {
+            material    wall;
+            nVec        (0 -1 0);
+            planePoint  (0 0.05 0);
+
+            finitePatch true;
+            minBound    (-0.04 0.05  0.01);
+            maxBound    ( 0.04 0.05  0.04);
+            pad         1e-7;
+        }
+
+        shoulder_zMinus
+        {
+            material    wall;
+            nVec        (0 -1 0);
+            planePoint  (0 0.05 0);
+
+            finitePatch true;
+            minBound    (-0.04 0.05 -0.04);
+            maxBound    ( 0.04 0.05 -0.01);
+            pad         1e-7;
+        }
+
+        shoulder_xPlus
+        {
+            material    wall;
+            nVec        (0 -1 0);
+            planePoint  (0 0.05 0);
+
+            finitePatch true;
+            minBound    ( 0.01 0.05 -0.01);
+            maxBound    ( 0.04 0.05  0.01);
+            pad         1e-7;
+        }
+
+        shoulder_xMinus
+        {
+            material    wall;
+            nVec        (0 -1 0);
+            planePoint  (0 0.05 0);
+
+            finitePatch true;
+            minBound    (-0.04 0.05 -0.01);
+            maxBound    (-0.01 0.05  0.01);
+            pad         1e-7;
+        }
+
+    }
+}
+
+virtualMesh
+{
+    level 4;
+    charCellSize 0.0005;
+}
+
+PH_SC_reservoir
+{
+
+    fullyCoupledBody
+    {
+        velocity (0 0 0);
+    }
+
+    rho         rho [1 -3 0 0 0 0 0] 1000;
+
+    refineMC 5;
+
+    U
+    {
+        BC  noSlip;
+    }
+
+    bodyAddition
+    {
+        addModel onceScatter;
+        onceScatterCoeffs
+        {
+            addMode fieldBased;
+            fieldBasedCoeffs
+            {
+                fieldName lambda;
+                fieldValue 0.3;
+            }
+
+            addDomain boundBox;
+            boundBoxCoeffs
+            {
+                minBound (-0.04 0.05 -0.04);
+                maxBound ( 0.04 0.15  0.04);
+            }
+
+            scalingMode    noScaling;
+            noScalingCoeffs{}
+
+            rotationMode   randomRotation;
+            randomRotationCoeffs{}
+        }
+    }
+
+    material particle;
+    bodyGeom convex;
+    updateTorque true;
+    sdBasedLambda false;
+    interfaceSpan 1.0;
+    startSynced false;
+    refineBuffers 0;
+    timesToSetStatic -1;
+}
+
+// ************************************************************************* //
+
