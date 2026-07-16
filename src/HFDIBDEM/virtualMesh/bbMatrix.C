@@ -41,14 +41,33 @@ bbMatrix::bbMatrix
     const vector matrixSize,
     const boundBox bBox,
     const scalar& charCellSize,
-    const scalar& subVolumeV
+    const scalar& subVolumeV,
+    const bool fitToBBox
 )
 :
 matrixSize_(matrixSize),
 bBox_(bBox),
 charCellSize_(charCellSize),
-subVolumeV_(subVolumeV)
+subVolumeV_(subVolumeV),
+fitToBBox_(fitToBBox),
+subVolumeSize_
+(
+    vector::one
+   *(charCellSize_/virtualMeshLevel::getLevelOfDivision())
+)
 {
+    if (fitToBBox_)
+    {
+        for (label dir = 0; dir < 3; dir++)
+        {
+            if (matrixSize_[dir] > 0)
+            {
+                subVolumeSize_[dir] =
+                    bBox_.span()[dir]/matrixSize_[dir];
+            }
+        }
+    }
+
     bbMatrix_ = List<List<List<autoPtr<subVolumeProperties>>>>(matrixSize_[0],
         List<List<autoPtr<subVolumeProperties>>>(matrixSize_[1],
         List<autoPtr<subVolumeProperties>>(matrixSize_[2])));
@@ -62,11 +81,41 @@ vector bbMatrix::getPointInMesh
 	const vector& subVolumeIndex
 )
 {
+    if (fitToBBox_)
+    {
+        return vector
+        (
+            bBox_.min()[0]
+          + (subVolumeIndex[0] + 0.5)*subVolumeSize_[0],
+            bBox_.min()[1]
+          + (subVolumeIndex[1] + 0.5)*subVolumeSize_[1],
+            bBox_.min()[2]
+          + (subVolumeIndex[2] + 0.5)*subVolumeSize_[2]
+        );
+    }
+
     return vector(
         bBox_.min()[0] + (2*subVolumeIndex[0]+1)*(charCellSize_/virtualMeshLevel::getLevelOfDivision())*0.5,
         bBox_.min()[1] + (2*subVolumeIndex[1]+1)*(charCellSize_/virtualMeshLevel::getLevelOfDivision())*0.5,
         bBox_.min()[2] + (2*subVolumeIndex[2]+1)*(charCellSize_/virtualMeshLevel::getLevelOfDivision())*0.5
     );
+}
+//---------------------------------------------------------------------------//
+boundBox bbMatrix::getSubVolumeBB
+(
+    const vector& subVolumeIndex
+) const
+{
+    vector subMin = bBox_.min();
+    vector subMax = bBox_.min();
+
+    for (label dir = 0; dir < 3; dir++)
+    {
+        subMin[dir] += subVolumeIndex[dir]*subVolumeSize_[dir];
+        subMax[dir] += (subVolumeIndex[dir] + 1)*subVolumeSize_[dir];
+    }
+
+    return boundBox(subMin, subMax);
 }
 //---------------------------------------------------------------------------//
 vector bbMatrix::getSVIndexForPoint
@@ -77,7 +126,23 @@ vector bbMatrix::getSVIndexForPoint
     vector subVolumeIndex(vector::zero);
     for(label i = 0;i<3;i++)
     {
-        subVolumeIndex[i] = floor((pointInDomain[i]-bBox_.min()[i])/charCellSize_*virtualMeshLevel::getLevelOfDivision());
+        if (fitToBBox_)
+        {
+            subVolumeIndex[i] = floor
+            (
+                (pointInDomain[i] - bBox_.min()[i])
+               /(subVolumeSize_[i] + VSMALL)
+            );
+        }
+        else
+        {
+            // Preserve the original infinite-wall indexing expression.
+            subVolumeIndex[i] = floor
+            (
+                (pointInDomain[i]-bBox_.min()[i])/charCellSize_
+               *virtualMeshLevel::getLevelOfDivision()
+            );
+        }
         if(subVolumeIndex[i] >= matrixSize_[i] || subVolumeIndex[i] < 0 )
         {
             subVolumeIndex = (vector::one)*(-1);
@@ -102,7 +167,23 @@ vector bbMatrix::getSVIndexForPoint_Wall
     vector subVolumeIndex(vector::zero);
     for(label i = 0;i<3;i++)
     {
-        subVolumeIndex[i] = floor((pointInDomain[i]-bBox_.min()[i])/charCellSize_*virtualMeshLevel::getLevelOfDivision());
+        if (fitToBBox_)
+        {
+            subVolumeIndex[i] = floor
+            (
+                (pointInDomain[i] - bBox_.min()[i])
+               /(subVolumeSize_[i] + VSMALL)
+            );
+        }
+        else
+        {
+            // Preserve the original infinite-wall indexing expression.
+            subVolumeIndex[i] = floor
+            (
+                (pointInDomain[i]-bBox_.min()[i])/charCellSize_
+               *virtualMeshLevel::getLevelOfDivision()
+            );
+        }
         if(subVolumeIndex[i] >= matrixSize_[i] || subVolumeIndex[i] < 0 )
         {
             return(getSVIndexForPoint(bBox_.midpoint()));
@@ -122,8 +203,23 @@ vector bbMatrix::getFirstSubVolumeIndex
     isInMatrix = true;
     for(label i = 0;i<3;i++)
     {
-        subVolumeIndex[i] = floor((subVolumePoint[i]-bBox_.min()[i])
-            /charCellSize_*virtualMeshLevel::getLevelOfDivision());
+        if (fitToBBox_)
+        {
+            subVolumeIndex[i] = floor
+            (
+                (subVolumePoint[i] - bBox_.min()[i])
+               /(subVolumeSize_[i] + VSMALL)
+            );
+        }
+        else
+        {
+            // Preserve the original infinite-wall indexing expression.
+            subVolumeIndex[i] = floor
+            (
+                (subVolumePoint[i]-bBox_.min()[i])/charCellSize_
+               *virtualMeshLevel::getLevelOfDivision()
+            );
+        }
 
         if(subVolumeIndex[i] >= matrixSize_[i] || subVolumeIndex[i] < 0 )
         {

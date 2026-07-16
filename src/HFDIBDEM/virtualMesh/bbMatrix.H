@@ -64,6 +64,8 @@ class bbMatrix
     const boundBox bBox_;
     const scalar charCellSize_;
     const scalar subVolumeV_;
+    const bool fitToBBox_;
+    vector subVolumeSize_;
     List<List<List<autoPtr<subVolumeProperties>>>> bbMatrix_;
 
     public:
@@ -75,7 +77,8 @@ class bbMatrix
     const vector matrixSize,
     const boundBox bBox,
     const scalar& charCellSize,
-    const scalar& subVolumeV
+    const scalar& subVolumeV,
+    const bool fitToBBox = false
     );
 
     // Destructors -------------------------------------------------
@@ -99,6 +102,11 @@ class bbMatrix
     (
         const vector& subVolumeIndex
     );
+
+    boundBox getSubVolumeBB
+    (
+        const vector& subVolumeIndex
+    ) const;
 
     vector getSVIndexForPoint
     (
@@ -139,6 +147,11 @@ class bbMatrix
     scalar getCharCellSize()
     {
         return charCellSize_;
+    }
+
+    vector getSubVolumeSize() const
+    {
+        return subVolumeSize_;
     }
 
     boundBox getBBox()

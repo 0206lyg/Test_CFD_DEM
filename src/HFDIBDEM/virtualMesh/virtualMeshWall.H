@@ -62,7 +62,8 @@ struct virtualMeshWallInfo
     startingPoint(vector::zero),
     subVolumeNVector(vector::zero),
     charCellSize(0),
-    subVolumeV(0)
+    subVolumeV(0),
+    fitToBBox(false)
 
     {}
     virtualMeshWallInfo(
@@ -70,12 +71,14 @@ struct virtualMeshWallInfo
         point startingPoint,
         vector subVolumeNVector,
         scalar charCellSize,
-        scalar subVolumeV):
+        scalar subVolumeV,
+        bool fitToBBox = false):
     bBox(bBox),
     startingPoint(startingPoint),
     subVolumeNVector(subVolumeNVector),
     charCellSize(charCellSize),
-    subVolumeV(subVolumeV)
+    subVolumeV(subVolumeV),
+    fitToBBox(fitToBBox)
     {}
 
     const point& getStartingPoint()
@@ -91,6 +94,11 @@ struct virtualMeshWallInfo
     const scalar& getCharCellSize()
     {
         return charCellSize;
+    }
+
+    bool usesFittedBBoxGrid() const
+    {
+        return fitToBBox;
     }
 
     void shiftBBox
@@ -119,7 +127,8 @@ struct virtualMeshWallInfo
     point startingPoint;
     vector subVolumeNVector;
     scalar charCellSize;
-    scalar subVolumeV;    
+    scalar subVolumeV;
+    bool fitToBBox;
 };
 
 /*---------------------------------------------------------------------------*\
@@ -165,7 +174,11 @@ class virtualMeshWall
 
     scalar evaluateContact();
 
-    void checkSubVolume(subVolumeProperties& subVolume);
+    void checkSubVolume
+    (
+        subVolumeProperties& subVolume,
+        const vector& subVolumeIndex
+    );
 
     void resetSubVolume(subVolumeProperties& subVolume);
 
@@ -175,6 +188,11 @@ class virtualMeshWall
     );
 
     label getInternalSV();
+
+    vector getSubVolumeSize() const
+    {
+        return bbMatrix_.getSubVolumeSize();
+    }
 
     DynamicPointList& getEdgeSVPoints()
     {

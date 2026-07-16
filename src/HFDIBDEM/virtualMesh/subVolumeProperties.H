@@ -59,6 +59,8 @@ class subVolumeProperties
     bool isTBody=false;
     bool toCheck=true;
     bool isOnEdge=false;
+    scalar cBodyVolume=0;
+    point cBodyCenter=vector::zero;
 
     // point pointInMesh;
     // autoPtr<point> pointInMesh;
