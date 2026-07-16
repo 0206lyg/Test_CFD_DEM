@@ -47,6 +47,55 @@ namespace contactModel
 {
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+namespace
+{
+
+bool singleFiniteWallPatchContact
+(
+    const List<string>& contactPatches,
+    string& wallName
+)
+{
+    if (contactPatches.size() != 1)
+    {
+        return false;
+    }
+
+    wallName = contactPatches[0];
+
+    const HashTable<bool,string,Hash<string>>& finiteInfo =
+        wallPlaneInfo::getWallFiniteInfo();
+
+    return
+    (
+        finiteInfo.found(wallName)
+     && finiteInfo[wallName]
+    );
+}
+
+label wallNormalDirectionContact(const string& wallName)
+{
+    const vector& normal =
+        wallPlaneInfo::getWallPlaneInfo()[wallName][0];
+
+    const scalar ax = mag(normal[0]);
+    const scalar ay = mag(normal[1]);
+    const scalar az = mag(normal[2]);
+
+    if (ax >= ay && ax >= az)
+    {
+        return 0;
+    }
+    else if (ay >= ax && ay >= az)
+    {
+        return 1;
+    }
+
+    return 2;
+}
+
+}
+
 //---------------------------------------------------------------------------//
 bool detectWallContact(
     const fvMesh&   mesh,
@@ -263,6 +312,9 @@ void getWallContactVars_ArbShape(
     autoPtr<DynamicVectorList> contactCenters(
         new DynamicVectorList);
 
+    autoPtr<DynamicScalarList> contactCenterVolumes(
+        new DynamicScalarList);
+
     autoPtr<DynamicVectorList> contactPlaneCenters(
         new DynamicVectorList);
 
@@ -273,6 +325,14 @@ void getWallContactVars_ArbShape(
     label vMPlaneInfoSize  = sCW.getVMPlaneSize();
     const List<Tuple2<point,boundBox>>& sCInternalInfo = sCW.getInternalElements();
     const List<string>& contactPatches = sCW.getContactPatches();
+
+    string finiteWallName;
+    const bool finiteSinglePatch =
+        singleFiniteWallPatchContact(contactPatches, finiteWallName);
+
+    const label finiteNormalDirection = finiteSinglePatch
+      ? wallNormalDirectionContact(finiteWallName)
+      : -1;
 
     for(label i = 0; i< vMContactInfoSize; i++)
     {
@@ -287,10 +347,29 @@ void getWallContactVars_ArbShape(
             wallCntInfo.getcClass().getGeomModel()
         );
 
-        if(virtMeshWall.detectFirstContactPoint())
+        if (finiteSinglePatch)
         {
-            intersectVolume += virtMeshWall.evaluateContact();
-            contactCenters().append(virtMeshWall.getContactCenter());
+            const scalar contactVolumeLoc =
+                virtMeshWall.evaluateContact();
+
+            if (contactVolumeLoc > VSMALL)
+            {
+                intersectVolume += contactVolumeLoc;
+                contactCenters().append(virtMeshWall.getContactCenter());
+                contactCenterVolumes().append(contactVolumeLoc);
+            }
+        }
+        else if(virtMeshWall.detectFirstContactPoint())
+        {
+            const scalar contactVolumeLoc =
+                virtMeshWall.evaluateContact();
+
+            if (contactVolumeLoc > VSMALL)
+            {
+                intersectVolume += contactVolumeLoc;
+                contactCenters().append(virtMeshWall.getContactCenter());
+                contactCenterVolumes().append(contactVolumeLoc);
+            }
         }
     }
 
@@ -298,6 +377,10 @@ void getWallContactVars_ArbShape(
     {
         intersectVolume += sCInternalInfo[sCII].second().volume();
         contactCenters().append(sCInternalInfo[sCII].first());
+        contactCenterVolumes().append
+        (
+            sCInternalInfo[sCII].second().volume()
+        );
     }
 
     if(intersectVolume>0)
@@ -315,25 +398,65 @@ void getWallContactVars_ArbShape(
                 wallCntInfo.getcClass().getGeomModel()
             ));
 
-            if(virtMeshPlane->detectFirstFaceContactPoint())
+            if (finiteSinglePatch)
             {
-                scalar contactAreaLoc = (virtMeshPlane->evaluateContact()/vmWInfo->getSVVolume())*(pow(vmWInfo->getSVVolume(),2.0/3));
+                // The fitted finite plane VM is a complete one-cell-thick
+                // slab.  Integrate it directly instead of applying the
+                // infinite-wall starting-point discovery stage.
+                const scalar planeContactVolume =
+                    virtMeshPlane->evaluateContact();
+
+                const scalar normalCellSize =
+                    virtMeshPlane->getSubVolumeSize()
+                    [finiteNormalDirection];
+
+                const scalar contactAreaLoc =
+                    planeContactVolume/(normalCellSize + VSMALL);
+
+                contactAreas().append(contactAreaLoc);
+                contactPlaneCenters().append(virtMeshPlane->getContactCenter());
+            }
+            else if(virtMeshPlane->detectFirstFaceContactPoint())
+            {
+                // Preserve the original infinite-wall area expression.
+                const scalar contactAreaLoc =
+                    (virtMeshPlane->evaluateContact()
+                   /vmWInfo->getSVVolume())
+                   *pow(vmWInfo->getSVVolume(),2.0/3);
+
                 contactAreas().append(contactAreaLoc);
                 contactPlaneCenters().append(virtMeshPlane->getContactCenter());
             }
             else
             {
-                contactAreas().append((intersectVolume/vmWInfo->getSVVolume())*(pow(vmWInfo->getSVVolume(),2.0/3)));
+                // Preserve the original infinite-wall fallback.
+                contactAreas().append
+                (
+                    (intersectVolume/vmWInfo->getSVVolume())
+                   *pow(vmWInfo->getSVVolume(),2.0/3)
+                );
                 contactPlaneCenters().append(virtMeshPlane->getContactCenter());
             }
         }
 
-        forAll(contactCenters(),cC)
+        if (finiteSinglePatch)
         {
-            contactCenter += contactCenters()[cC];
+            forAll(contactCenters(),cC)
+            {
+                contactCenter +=
+                    contactCenters()[cC]*contactCenterVolumes()[cC];
+            }
+            contactCenter /= intersectVolume;
         }
-        // Pout << "contactCenter " << contactCenter.size() << endl;
-        contactCenter /= contactCenters().size();
+        else
+        {
+            // Preserve the original infinite-wall centre averaging.
+            forAll(contactCenters(),cC)
+            {
+                contactCenter += contactCenters()[cC];
+            }
+            contactCenter /= contactCenters().size();
+        }
         // Pout << "Survived #0 " << endl;
         // Pout << "contactAreas() " << contactAreas() << endl;
         forAll(contactAreas(),cA)
@@ -341,7 +464,11 @@ void getWallContactVars_ArbShape(
             contactArea += contactAreas()[cA];
         }
 
-        if(contactArea == 0)
+        if
+        (
+            (finiteSinglePatch && contactArea <= VSMALL)
+         || (!finiteSinglePatch && contactArea == 0)
+        )
         {
             return;
         }

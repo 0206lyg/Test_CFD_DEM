@@ -136,6 +136,32 @@ boundBox emptyFinitePatchBoxWCInfo()
     return boundBox(vector::zero, vector::zero);
 }
 
+boundBox spectatorCellBBWCInfo
+(
+    const spectatorMesh& sMesh,
+    const vector& cellIndex
+)
+{
+    const point cellMin
+    (
+        sMesh.bBox_.min()[0] + cellIndex[0]*sMesh.charCellSize_,
+        sMesh.bBox_.min()[1] + cellIndex[1]*sMesh.charCellSize_,
+        sMesh.bBox_.min()[2] + cellIndex[2]*sMesh.charCellSize_
+    );
+
+    const point cellMax
+    (
+        cellMin[0] + sMesh.charCellSize_,
+        cellMin[1] + sMesh.charCellSize_,
+        cellMin[2] + sMesh.charCellSize_
+    );
+
+    // getElementBB() reads vertexMatrix_ entries directly.  The finite-wall
+    // scan intentionally has no vertex seed, so those autoPtrs need not have
+    // been allocated.  Reconstruct the same regular-cell box analytically.
+    return boundBox(cellMin, cellMax);
+}
+
 bool finitePatchBBOverlapsSupportWCInfo
 (
     const boundBox& bb,
@@ -150,6 +176,8 @@ bool finitePatchBBOverlapsSupportWCInfo
     const vector& minBound = wallPlaneInfo::getWallMinBoundInfo()[wallName];
     const vector& maxBound = wallPlaneInfo::getWallMaxBoundInfo()[wallName];
 
+    // pad is a broad-phase tolerance only.  Exact contact boxes are clipped
+    // to the physical minBound/maxBound below.
     const scalar pad = finiteWallPatchPadWCInfo(wallName);
     const label nDir = wallNormalDirectionWCInfo(wallName);
 
@@ -226,7 +254,6 @@ boundBox clipBBToFinitePatchSupportWCInfo
     const vector& minBound = wallPlaneInfo::getWallMinBoundInfo()[wallName];
     const vector& maxBound = wallPlaneInfo::getWallMaxBoundInfo()[wallName];
 
-    const scalar pad = finiteWallPatchPadWCInfo(wallName);
     const label nDir = wallNormalDirectionWCInfo(wallName);
 
     vector newMin = bb.min();
@@ -240,10 +267,10 @@ boundBox clipBBToFinitePatchSupportWCInfo
         }
 
         const scalar lo =
-            minScalarWCInfo(minBound[dir], maxBound[dir]) - pad;
+            minScalarWCInfo(minBound[dir], maxBound[dir]);
 
         const scalar hi =
-            maxScalarWCInfo(minBound[dir], maxBound[dir]) + pad;
+            maxScalarWCInfo(minBound[dir], maxBound[dir]);
 
         newMin[dir] = maxScalarWCInfo(bb.min()[dir], lo);
         newMax[dir] = minScalarWCInfo(bb.max()[dir], hi);
@@ -293,7 +320,6 @@ bool finitePatchPointInsideSupportWCInfo
     const vector& minBound = wallPlaneInfo::getWallMinBoundInfo()[wallName];
     const vector& maxBound = wallPlaneInfo::getWallMaxBoundInfo()[wallName];
 
-    const scalar pad = finiteWallPatchPadWCInfo(wallName);
     const label nDir = wallNormalDirectionWCInfo(wallName);
 
     for (label dir = 0; dir < 3; dir++)
@@ -304,10 +330,10 @@ bool finitePatchPointInsideSupportWCInfo
         }
 
         const scalar lo =
-            minScalarWCInfo(minBound[dir], maxBound[dir]) - pad;
+            minScalarWCInfo(minBound[dir], maxBound[dir]);
 
         const scalar hi =
-            maxScalarWCInfo(minBound[dir], maxBound[dir]) + pad;
+            maxScalarWCInfo(minBound[dir], maxBound[dir]);
 
         if (pp[dir] < lo || pp[dir] > hi)
         {
@@ -353,29 +379,6 @@ bool isInsideWallDomainWCInfo
 
     return !finitePatchPointInsideSupportWCInfo(p, wallName);
 }
-
-bool pointPenetratesWallWCInfo
-(
-    const point& p,
-    const string& wallName
-)
-{
-    if (!finiteWallPatchActiveWCInfo(wallName))
-    {
-        return !isInsideInfinitePlaneWCInfo(p, wallName);
-    }
-
-    // Same boolean condition as before, but evaluate the cheap plane test first.
-    // For most sample points there is no wall penetration, so we avoid the more
-    // expensive finite-support projection and bound checks.
-    if (isInsideInfinitePlaneWCInfo(p, wallName))
-    {
-        return false;
-    }
-
-    return finitePatchPointInsideSupportWCInfo(p, wallName);
-}
-
 
 boundBox clipBBToWallPenetrationWCInfo
 (
@@ -451,302 +454,147 @@ boundBox projectBBToWallPlaneWCInfo
     return boundBox(planePoints, false);
 }
 
-bool sampledPointIsFiniteContactWCInfo
-(
-    const point& p,
-    const string& wallName,
-    ibContactClass& cClass
-)
-{
-    // Preserve the exact logical condition, but reject by wall/support first.
-    // This prevents unnecessary expensive particle pointInside() calls for
-    // sample points that cannot contribute to finite wall contact.
-    if (!pointPenetratesWallWCInfo(p, wallName))
-    {
-        return false;
-    }
-
-    return cClass.getGeomModel().pointInside(p);
-}
-
-bool subCellContainsFiniteContactWCInfo
-(
-    const boundBox& subBB,
-    const string& wallName,
-    ibContactClass& cClass
-)
-{
-    // Axis-aligned finite walls are the intended finite patch use case here.
-    // In that case projection onto the wall plane does not change tangential
-    // coordinates, so a tangential AABB non-overlap cannot contain any valid
-    // finite-support sample point.  For non-axis-aligned normals, do not use
-    // this shortcut, so the original 27-point logic is preserved.
-    if
-    (
-        finiteWallNormalAxisAlignedWCInfo(wallName)
-     && !finitePatchBBOverlapsSupportWCInfo(subBB, wallName)
-    )
-    {
-        return false;
-    }
-
-    // Conservative no-penetration rejection.  The wall half-space test is
-    // linear, so if every AABB vertex is inside the fluid side, no sample point
-    // in this subcell can penetrate the wall.  This avoids the 27 particle
-    // pointInside() calls for subcells that cannot contribute to contact.
-    const pointField subBBPoints = subBB.points();
-    bool anyPointOutsideWall(false);
-    forAll(subBBPoints, pI)
-    {
-        if (!isInsideInfinitePlaneWCInfo(subBBPoints[pI], wallName))
-        {
-            anyPointOutsideWall = true;
-            break;
-        }
-    }
-
-    if (!anyPointOutsideWall)
-    {
-        return false;
-    }
-
-    const vector subMin = subBB.min();
-    const vector subMax = subBB.max();
-    const vector subMid = 0.5*(subMin + subMax);
-
-    for (label i = 0; i < 3; i++)
-    {
-        for (label j = 0; j < 3; j++)
-        {
-            for (label k = 0; k < 3; k++)
-            {
-                point p(vector::zero);
-
-                p[0] = (i == 0 ? subMin[0] : (i == 1 ? subMid[0] : subMax[0]));
-                p[1] = (j == 0 ? subMin[1] : (j == 1 ? subMid[1] : subMax[1]));
-                p[2] = (k == 0 ? subMin[2] : (k == 1 ? subMid[2] : subMax[2]));
-
-                if (sampledPointIsFiniteContactWCInfo(p, wallName, cClass))
-                {
-                    return true;
-                }
-            }
-        }
-    }
-
-    return false;
-}
-
-label finiteSubDivisionsWCInfo(const scalar span, const scalar subH)
-{
-    if (span <= VSMALL || subH <= VSMALL)
-    {
-        return 1;
-    }
-
-    label nDiv = label(ceil(span/subH - SMALL));
-
-    if (nDiv < 1)
-    {
-        nDiv = 1;
-    }
-
-    return nDiv;
-}
-
-bool finiteBBPositiveOverlapWCInfo
-(
-    const boundBox& a,
-    const boundBox& b
-)
-{
-    for (label dir = 0; dir < 3; dir++)
-    {
-        const scalar lo = maxScalarWCInfo(a.min()[dir], b.min()[dir]);
-        const scalar hi = minScalarWCInfo(a.max()[dir], b.max()[dir]);
-
-        if ((hi - lo) <= VSMALL)
-        {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-void finiteSubCellIndexRangeWCInfo
-(
-    const scalar base,
-    const scalar span,
-    const label n,
-    const scalar clipMin,
-    const scalar clipMax,
-    label& i0,
-    label& i1
-)
-{
-    if (span <= VSMALL || n <= 0 || (clipMax - clipMin) <= VSMALL)
-    {
-        i0 = 1;
-        i1 = 0;
-        return;
-    }
-
-    const scalar qMin = (clipMin - base)*scalar(n)/span;
-    const scalar qMax = (clipMax - base)*scalar(n)/span;
-
-    i0 = label(floor(qMin));
-    i1 = label(ceil(qMax)) - 1;
-
-    if (i0 < 0)
-    {
-        i0 = 0;
-    }
-
-    if (i1 > n - 1)
-    {
-        i1 = n - 1;
-    }
-}
-
-void appendFiniteWallContactBoxesWCInfo
+boundBox finiteContactBoxWCInfo
 (
     const boundBox& smCellBB,
-    const string& wallName,
-    ibContactClass& cClass,
-    List<Tuple2<point,boundBox>>& sMExportList,
-    pointField& overallContactPoints
+    const string& wallName
 )
 {
     if (!finitePatchBBOverlapsSupportWCInfo(smCellBB, wallName))
     {
-        return;
+        return emptyFinitePatchBoxWCInfo();
     }
 
-    // Use the clipped region only to shrink the loop range.
-    // The actual subcell grid and all accepted contactBB objects remain based
-    // on the original smCellBB subdivision below.
-    boundBox candidateBB =
+    boundBox contactBB =
         clipBBToWallPenetrationWCInfo(smCellBB, wallName);
 
-    candidateBB =
-        clipBBToFinitePatchSupportWCInfo(candidateBB, wallName);
+    contactBB = clipBBToFinitePatchSupportWCInfo(contactBB, wallName);
 
-    if (!finiteContactBBValidWCInfo(candidateBB, wallName))
+    if (!finiteContactBBValidWCInfo(contactBB, wallName))
     {
-        return;
+        return emptyFinitePatchBoxWCInfo();
     }
 
-    const scalar h = virtualMeshLevel::getCharCellSize();
-    const scalar level = virtualMeshLevel::getLevelOfDivision();
-    const scalar subH = h/level;
+    return contactBB;
+}
 
-    const vector baseMin = smCellBB.min();
-    const vector span = smCellBB.span();
-
-    const label nx = finiteSubDivisionsWCInfo(span[0], subH);
-    const label ny = finiteSubDivisionsWCInfo(span[1], subH);
-    const label nz = finiteSubDivisionsWCInfo(span[2], subH);
-
-    label i0, i1;
-    label j0, j1;
-    label k0, k1;
-
-    finiteSubCellIndexRangeWCInfo
-    (
-        baseMin[0],
-        span[0],
-        nx,
-        candidateBB.min()[0],
-        candidateBB.max()[0],
-        i0,
-        i1
-    );
-
-    finiteSubCellIndexRangeWCInfo
-    (
-        baseMin[1],
-        span[1],
-        ny,
-        candidateBB.min()[1],
-        candidateBB.max()[1],
-        j0,
-        j1
-    );
-
-    finiteSubCellIndexRangeWCInfo
-    (
-        baseMin[2],
-        span[2],
-        nz,
-        candidateBB.min()[2],
-        candidateBB.max()[2],
-        k0,
-        k1
-    );
-
-    if (i0 > i1 || j0 > j1 || k0 > k1)
+bool finiteContactBoxMayContainParticleWCInfo
+(
+    const boundBox& contactBB,
+    ibContactClass& cClass
+)
+{
+    if (contactBB.volume() <= VSMALL)
     {
-        return;
+        return false;
     }
 
-    for (label i = i0; i <= i1; i++)
+    // getVolumeType() uses the STL octree to detect triangles crossing the
+    // box.  Unlike a vertex seed, a mixed box therefore also detects a
+    // particle edge/face entering the finite wall prism.
+    subVolume candidateVolume(contactBB);
+    const volumeType candidateType =
+        cClass.getGeomModel().getVolumeType(candidateVolume, true);
+
+    return candidateType != volumeType::outside;
+}
+
+List<DynamicList<vector>> finiteWallSMComponentsWCInfo
+(
+    spectatorMesh& sMesh,
+    const string& wallName,
+    ibContactClass& cClass
+)
+{
+    typedef HashSet<vector,Hash<vector>> vectorHashSetWCInfo;
+
+    DynamicList<vector> candidateCells;
+    vectorHashSetWCInfo candidateSet;
+
+    // This is a coarse spectator-mesh scan only.  Wall/support rejection is
+    // deliberately performed before the particle-octree query.
+    for (label i = 0; i < label(sMesh.matrixSize_[0]); i++)
     {
-        for (label j = j0; j <= j1; j++)
+        for (label j = 0; j < label(sMesh.matrixSize_[1]); j++)
         {
-            for (label k = k0; k <= k1; k++)
+            for (label k = 0; k < label(sMesh.matrixSize_[2]); k++)
             {
-                vector subMin = baseMin;
-                vector subMax = baseMin;
-
-                subMin[0] += span[0]*scalar(i)/scalar(nx);
-                subMin[1] += span[1]*scalar(j)/scalar(ny);
-                subMin[2] += span[2]*scalar(k)/scalar(nz);
-
-                subMax[0] += span[0]*scalar(i + 1)/scalar(nx);
-                subMax[1] += span[1]*scalar(j + 1)/scalar(ny);
-                subMax[2] += span[2]*scalar(k + 1)/scalar(nz);
-
-                boundBox subBB(subMin, subMax);
-
-                if (!finiteBBPositiveOverlapWCInfo(subBB, candidateBB))
-                {
-                    continue;
-                }
+                vector cellIndex(i, j, k);
+                const boundBox contactBB = finiteContactBoxWCInfo
+                (
+                    spectatorCellBBWCInfo(sMesh, cellIndex),
+                    wallName
+                );
 
                 if
                 (
-                    !subCellContainsFiniteContactWCInfo
+                    contactBB.volume() > VSMALL
+                 && finiteContactBoxMayContainParticleWCInfo
                     (
-                        subBB,
-                        wallName,
+                        contactBB,
                         cClass
                     )
                 )
                 {
-                    continue;
+                    candidateCells.append(cellIndex);
+                    candidateSet.insert(cellIndex);
                 }
-
-                boundBox contactBB =
-                    clipBBToWallPenetrationWCInfo(subBB, wallName);
-
-                contactBB =
-                    clipBBToFinitePatchSupportWCInfo(contactBB, wallName);
-
-                if (!finiteContactBBValidWCInfo(contactBB, wallName))
-                {
-                    continue;
-                }
-
-                Tuple2<point,boundBox> sMExport;
-                sMExport.first() = contactBB.midpoint();
-                sMExport.second() = contactBB;
-                sMExportList.append(sMExport);
-
-                overallContactPoints.append(contactBB.points());
             }
         }
     }
+
+    // Use the same face-neighbour flood-fill role as the infinite-wall SM:
+    // it labels connected candidate components, but it no longer discovers
+    // contact from particle vertices or performs fine-volume integration.
+    List<DynamicList<vector>> components;
+    vectorHashSetWCInfo visited;
+
+    forAll(candidateCells, seedI)
+    {
+        const vector seed = candidateCells[seedI];
+
+        if (visited.found(seed))
+        {
+            continue;
+        }
+
+        DynamicList<vector> component;
+        DynamicList<vector> queue;
+        queue.append(seed);
+        visited.insert(seed);
+
+        label nextI = 0;
+        while (nextI < queue.size())
+        {
+            vector cellIndex = queue[nextI++];
+            component.append(cellIndex);
+
+            const List<vector> neighbours =
+                sMesh.faceNeighbourElements(cellIndex);
+
+            forAll(neighbours, neighbourI)
+            {
+                const vector& neighbour = neighbours[neighbourI];
+
+                if
+                (
+                    candidateSet.found(neighbour)
+                 && !visited.found(neighbour)
+                )
+                {
+                    visited.insert(neighbour);
+                    queue.append(neighbour);
+                }
+            }
+        }
+
+        if (component.size() > 0)
+        {
+            components.append(component);
+        }
+    }
+
+    return components;
 }
 
 }
@@ -1110,29 +958,25 @@ void wallContactInfo::findContactAreas()
     {
         string targetWall = finitePatches[fp];
 
-        autoPtr<DynamicVectorList> contactSTLPoints(
-            new DynamicVectorList);
-
-        forAll(bodyPoints,bP)
+        if (!finiteWallNormalAxisAlignedWCInfo(targetWall))
         {
-            if(pointPenetratesWallWCInfo(bodyPoints[bP], targetWall))
-            {
-                contactSTLPoints().append(bodyPoints[bP]);
-            }
-        }
-
-        if(contactSTLPoints().size() <= SMALL)
-        {
-            continue;
+            FatalErrorInFunction
+                << "Finite wall patch '" << targetWall << "' has normal "
+                << wallPlaneInfo::getWallPlaneInfo()[targetWall][0] << nl
+                << "The finite support implementation requires an "
+                << "axis-aligned wall normal."
+                << exit(FatalError);
         }
 
         constructSM();
 
-        List<string> targetPatches;
-        targetPatches.append(targetWall);
-
         List<DynamicList<vector>> possibleSMContact =
-            detectPossibleSMContact(contactSTLPoints(),targetPatches);
+            finiteWallSMComponentsWCInfo
+            (
+                SM_(),
+                targetWall,
+                ibContactClass_
+            );
 
         forAll(possibleSMContact,SC)
         {
@@ -1145,14 +989,29 @@ void wallContactInfo::findContactAreas()
             boundBox cBbox;
             forAll(possibleSMContact[SC],item)
             {
-                appendFiniteWallContactBoxesWCInfo
+                const boundBox contactBB = finiteContactBoxWCInfo
                 (
-                    SM_().getElementBB(possibleSMContact[SC][item]),
-                    targetWall,
-                    ibContactClass_,
-                    sMExportList,
-                    overallContactPoints
+                    spectatorCellBBWCInfo
+                    (
+                        SM_(),
+                        possibleSMContact[SC][item]
+                    ),
+                    targetWall
                 );
+
+                if (!finiteContactBBValidWCInfo(contactBB, targetWall))
+                {
+                    continue;
+                }
+
+                // One clipped coarse SM box is handed to virtualMeshWall.
+                // The VM performs the only fine-grid flood-fill; there is no
+                // separate L^3-by-27 pre-sampling pass for finite walls.
+                Tuple2<point,boundBox> sMExport;
+                sMExport.first() = contactBB.midpoint();
+                sMExport.second() = contactBB;
+                sMExportList.append(sMExport);
+                overallContactPoints.append(contactBB.points());
             }
 
             if
@@ -1166,12 +1025,10 @@ void wallContactInfo::findContactAreas()
 
             cBbox = boundBox(overallContactPoints,false);
 
-            // Restore the original infinite-wall area construction pattern for
-            // finite patches: contact volume is represented by many clipped
-            // subcell boxes, but contact area is represented once per connected
-            // subcontact component and target wall.  This avoids counting the
-            // same projected wall footprint once for every surviving normal
-            // layer of finite contact volume.
+            // Contact area is represented once per connected coarse component
+            // and target wall.  wallContact.C evaluates this plane slab with
+            // the fitted finite VM and converts its volume to area using the
+            // actual normal cell thickness.
             boundBox planeBox =
                 projectBBToWallPlaneWCInfo(cBbox, targetWall);
 

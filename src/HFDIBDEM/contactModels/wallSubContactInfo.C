@@ -108,18 +108,6 @@ label wallNormalDirectionWSCI(const string& wallName)
     return 2;
 }
 
-scalar finiteWallPatchPadWSCI(const string& wallName)
-{
-    scalar pad = 0.0;
-
-    if (wallPlaneInfo::getWallPadInfo().found(wallName))
-    {
-        pad = wallPlaneInfo::getWallPadInfo()[wallName];
-    }
-
-    return pad;
-}
-
 void clipBBToFinitePatchSupportWSCI
 (
     boundBox& bb,
@@ -137,7 +125,6 @@ void clipBBToFinitePatchSupportWSCI
     const vector& maxBound =
         wallPlaneInfo::getWallMaxBoundInfo()[wallName];
 
-    const scalar pad = finiteWallPatchPadWSCI(wallName);
     const label nDir = wallNormalDirectionWSCI(wallName);
 
     for (label dir = 0; dir < 3; dir++)
@@ -148,10 +135,10 @@ void clipBBToFinitePatchSupportWSCI
         }
 
         const scalar lo =
-            minScalarWSCI(minBound[dir], maxBound[dir]) - pad;
+            minScalarWSCI(minBound[dir], maxBound[dir]);
 
         const scalar hi =
-            maxScalarWSCI(minBound[dir], maxBound[dir]) + pad;
+            maxScalarWSCI(minBound[dir], maxBound[dir]);
 
         bb.min()[dir] = maxScalarWSCI(bb.min()[dir], lo);
         bb.max()[dir] = minScalarWSCI(bb.max()[dir], hi);
@@ -330,7 +317,7 @@ bodyId_(bodyId)
 
             subVolumeV =
                 correctedBB.volume()
-               /(componentProductWSCI(subVolumeNVector) + SMALL);
+               /componentProductWSCI(subVolumeNVector);
         }
         else
         {
@@ -362,7 +349,8 @@ bodyId_(bodyId)
                 contactBBData[cBD].first(),
                 subVolumeNVector,
                 h,
-                subVolumeV
+                subVolumeV,
+                finiteSinglePatch
             )  
         );
         vmWInfoList_.append(vmWInfo);
@@ -404,7 +392,7 @@ bodyId_(bodyId)
 
             subVolumeV =
                 correctedPlaneBB.volume()
-               /(componentProductWSCI(subVolumeNVector) + SMALL);
+               /componentProductWSCI(subVolumeNVector);
         }
         else
         {
@@ -431,7 +419,8 @@ bodyId_(bodyId)
                 planeBBData[pBD].first(),
                 subVolumeNVector,
                 h,
-                subVolumeV
+                subVolumeV,
+                finiteSinglePatch
             )
         );
         vmPlaneInfoList_.append(vmWInfo);
@@ -517,13 +506,12 @@ vector wallSubContactInfo::getFt(wallContactVars& wallCntvar, scalar deltaT)
         *wallCntvar.contactNormal_);
     // scale projected Ft to have same magnitude as FtLast
     vector FtLastS(mag(wallCntvar.FtPrev_) * (FtLastP/(mag(FtLastP)+SMALL)));
-    // compute relative tangential velocity
-    // vector cVeliNorm = wallCntvar.Veli_
-        // - ((wallCntvar.Veli_ & wallCntvar.contactNormal_)
-        // *wallCntvar.contactNormal_);
-    vector cVeliNorm = wallCntvar.Veli_*(wallCntvar.Veli_&wallCntvar.contactNormal_);
+    // Orthogonal projection of relative velocity onto the wall normal.
+    const vector cVeliNorm =
+        wallCntvar.contactNormal_
+       *(wallCntvar.Veli_ & wallCntvar.contactNormal_);
 
-    vector Vt(wallCntvar.Veli_-(cVeliNorm - vector::zero));
+    const vector Vt = wallCntvar.Veli_ - cVeliNorm;
     // compute tangential force
     if(contactModelInfo::getUseMindlinRotationalModel())
     {
