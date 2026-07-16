@@ -1,0 +1,143 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                |                                                 |
+| \      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \    /   O peration     | Version:  8                                     |
+|   \  /    A nd           | Web:      www.OpenFOAM.org                      |
+|    \/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "constant";
+    object      HFDIBDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+bodyNames ( "icoSphere" );
+
+interpolationSchemes
+{
+    U      cellPointFace;
+    method line;
+}
+
+surfaceThreshold    1e-4;
+stepDEM             0.02;
+geometricD          (1 -1 1);
+recordSimulation    true;
+recordFirstTimeStep false;
+nSolidsInDomain      1000;
+
+outputSetup
+{
+    basic       true;
+    iB          false;
+    DEM         false;
+    addModel    true;
+    parallelDEM false;
+}
+
+DEM
+{
+    
+    materials
+    {
+        particle
+        {
+            Y       1e7;
+            nu      0.3;
+            mu      0.75;
+            adhN    0;
+            eps     0.25;
+        }
+
+        wall
+        {
+            Y       1e7;
+            nu      0.2;
+            mu      0.75;
+            adhN    0;
+            eps     0.25;
+        }
+    }
+    LcCoeff 4.0;
+
+    collisionPatches
+    {
+		wall0
+		{
+			material wall;
+			nVec (-1.0 0.0 0.0);
+			planePoint (0.0 0.00 0.0);
+		}
+		wall1
+		{
+			material wall;
+			nVec (1.0 0.0 0.0);
+			planePoint (0.12 0.0 0.0);
+		}
+		wall2
+		{
+			material wall;
+			nVec (0.0 0.0 1.0);
+			planePoint (0.00 0.0 0.03);
+		}
+
+		wall3
+		{
+			material wall;
+			nVec (0.0 0.0 -1.0);
+			planePoint (0.0 0.0 -0.03);
+		}
+    }
+}
+
+virtualMesh
+{
+    level 2;
+    charCellSize 0.0012;
+}
+
+icoSphere
+{
+    fullyCoupledBody;
+    updateTorque true;
+    startSynced false;
+    rho         rho [1 -3 0 0 0 0 0] 10000;
+    material particle;
+    U
+    {
+        BC  noSlip;
+    }
+    bodyGeom convex;
+    interfaceSpan 1.0;
+    timesToSetStatic 80;
+    bodyAddition
+    {
+        addModel distribution;
+        distributionCoeffs
+        {
+            stlBaseSize     0.005;
+            addMode         fieldBased;
+            fieldBasedCoeffs
+            {
+                fieldName   lambda;
+                fieldValue	0.05;
+            }
+    
+            addDomain      boundBox;
+            boundBoxCoeffs
+            {
+                minBound (0 -0.001 -0.03);
+                maxBound (0.04 0.001 0.03);
+            }
+    
+            scalingMode    noScaling;
+            noScalingCoeffs{};
+            rotationMode   noRotation;
+            noRotationCoeffs{};
+        }
+    }
+}
+// ************************************************************************* //
