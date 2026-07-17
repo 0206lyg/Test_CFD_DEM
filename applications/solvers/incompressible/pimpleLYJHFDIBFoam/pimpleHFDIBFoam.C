@@ -121,6 +121,7 @@ int main(int argc, char *argv[])
             if (pimple.firstPimpleIter() || moveMeshOuterCorrectors)
             {
                 mesh.update();
+                HFDIBDEM.updateMovingWallsFromMesh();
 
                 if (mesh.changing())
                 {

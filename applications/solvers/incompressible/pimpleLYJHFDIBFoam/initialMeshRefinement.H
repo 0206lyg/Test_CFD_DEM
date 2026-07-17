@@ -1,6 +1,7 @@
 for (label level=0;level<maxRefinementLevel+1;level++)
 {
     mesh.update();
+    HFDIBDEM.resetMovingWallsFromMesh();
 
     if (mesh.changing())
     {
@@ -24,6 +25,6 @@ for (label level=0;level<maxRefinementLevel+1;level++)
         }
 
         lambda *= 0;
-        HFDIBDEM.recreateBodies(lambda,refineF);
+        HFDIBDEM.recreateBodies(lambda,refineF,true);
     }
 }
