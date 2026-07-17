@@ -70,6 +70,36 @@ class wallPlaneInfo
         return wallPadInfo_;
     }
 
+    static void setWallPlanePoint
+    (
+        const string& wallPatch,
+        const vector& planePoint
+    )
+    {
+        if (wallPlaneInfo_.found(wallPatch))
+        {
+            wallPlaneInfo_[wallPatch][1] = planePoint;
+        }
+    }
+
+    static void setWallFiniteBounds
+    (
+        const string& wallPatch,
+        const vector& minBound,
+        const vector& maxBound
+    )
+    {
+        if
+        (
+            wallMinBoundInfo_.found(wallPatch)
+         && wallMaxBoundInfo_.found(wallPatch)
+        )
+        {
+            wallMinBoundInfo_[wallPatch] = minBound;
+            wallMaxBoundInfo_[wallPatch] = maxBound;
+        }
+    }
+
     static void wallPlaneInfo_insert
     (
         const string& wallPatch,

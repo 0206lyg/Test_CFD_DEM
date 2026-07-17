@@ -42,6 +42,7 @@ Contributors
 #include "interAdhesion.H"
 #include "wallMatInfo.H"
 #include "wallPlaneInfo.H"
+#include "wallMotionInfo.H"
 #include "virtualMeshLevel.H"
 #include "cyclicPlaneInfo.H"
 #include "contactModelInfo.H"
@@ -77,6 +78,9 @@ HashTable<vector,string,Hash<string>> wallPlaneInfo::wallMaxBoundInfo_ =
 
 HashTable<scalar,string,Hash<string>> wallPlaneInfo::wallPadInfo_ =
     HashTable<scalar,string,Hash<string>>();
+
+HashTable<wallMotionState,string,Hash<string>> wallMotionInfo::wallMotionInfo_ =
+    HashTable<wallMotionState,string,Hash<string>>();
 
 HashTable<List<vector>,string,Hash<string>> cyclicPlaneInfo::cyclicPlaneInfo_ =
     HashTable<List<vector>,string,Hash<string>>();
