@@ -46,8 +46,34 @@ Contributors
 
 #define ORDER 2
 
+#include <fstream>
+#include <iomanip>
+
 using namespace Foam;
 using namespace contactModel;
+
+namespace
+{
+
+label dominantWallDirection(const vector& normal)
+{
+    const scalar ax = mag(normal[0]);
+    const scalar ay = mag(normal[1]);
+    const scalar az = mag(normal[2]);
+
+    if (ax >= ay && ax >= az)
+    {
+        return 0;
+    }
+    else if (ay >= ax && ay >= az)
+    {
+        return 1;
+    }
+
+    return 2;
+}
+
+}
 
 //---------------------------------------------------------------------------//
 openHFDIBDEM::openHFDIBDEM(const Foam::fvMesh& mesh)
@@ -80,6 +106,8 @@ prtcInfoTable_(0),
 stepDEM_(readScalar(HFDIBDEMDict_.lookup("stepDEM"))),
 recordSimulation_(readBool(HFDIBDEMDict_.lookup("recordSimulation")))
 {
+    wallMotionInfo::clear();
+
     materialProperties::matProps_insert(
         "None",
         materialInfo("None", 1, 1, 1, 1, 1)
@@ -296,7 +324,97 @@ recordSimulation_(readBool(HFDIBDEMDict_.lookup("recordSimulation")))
             patchNames[patchI],
             materialProperties::getMatProps()[patchMaterial]
         );
+
+        if (patchIDic.isDict("motion"))
+        {
+            const dictionary motionDic(patchIDic.subDict("motion"));
+            const word motionType(motionDic.lookup("type"));
+
+            if (motionType == "meshPatchTranslation")
+            {
+                const word sourcePatch(motionDic.lookup("patch"));
+
+                wallMotionInfo::insert
+                (
+                    patchNames[patchI],
+                    sourcePatch,
+                    planePoint,
+                    mesh_.time().timeIndex()
+                );
+
+                Info<< " -- collisionPatch " << patchNames[patchI]
+                    << " follows translating mesh patch " << sourcePatch
+                    << endl;
+            }
+            else
+            {
+                FatalIOErrorInFunction(HFDIBDEMDict_)
+                    << "Unsupported motion type '" << motionType
+                    << "' for collisionPatch " << patchNames[patchI] << nl
+                    << "Only meshPatchTranslation is implemented."
+                    << exit(FatalIOError);
+            }
+        }
+
+        if (patchIDic.isDict("supportLimit"))
+        {
+            const dictionary supportDic(patchIDic.subDict("supportLimit"));
+            const word supportType(supportDic.lookup("type"));
+            const word leaderWall(supportDic.lookup("wall"));
+            const word followedBound(supportDic.lookup("bound"));
+
+            if (supportType != "followWall")
+            {
+                FatalIOErrorInFunction(HFDIBDEMDict_)
+                    << "Unsupported supportLimit type '" << supportType
+                    << "' for collisionPatch " << patchNames[patchI] << nl
+                    << "Only followWall is implemented."
+                    << exit(FatalIOError);
+            }
+
+            if (followedBound != "min" && followedBound != "max")
+            {
+                FatalIOErrorInFunction(HFDIBDEMDict_)
+                    << "supportLimit bound must be min or max for "
+                    << patchNames[patchI]
+                    << exit(FatalIOError);
+            }
+
+            wallSupportLeader_.insert(patchNames[patchI], leaderWall);
+            wallSupportBound_.insert(patchNames[patchI], followedBound);
+        }
     }
+
+    const List<string> supportWalls(wallSupportLeader_.sortedToc());
+
+    forAll(supportWalls, wallI)
+    {
+        const string& followerWall = supportWalls[wallI];
+        const string& leaderWall = wallSupportLeader_[followerWall];
+
+        if (!wallMotionInfo::isMoving(leaderWall))
+        {
+            FatalIOErrorInFunction(HFDIBDEMDict_)
+                << "collisionPatch " << followerWall
+                << " follows wall " << leaderWall
+                << ", but that wall has no meshPatchTranslation motion."
+                << exit(FatalIOError);
+        }
+
+        if
+        (
+            !wallPlaneInfo::getWallFiniteInfo().found(followerWall)
+         || !wallPlaneInfo::getWallFiniteInfo()[followerWall]
+        )
+        {
+            FatalIOErrorInFunction(HFDIBDEMDict_)
+                << "supportLimit requires finitePatch true for "
+                << followerWall
+                << exit(FatalIOError);
+        }
+    }
+
+    resetMovingWallsFromMesh();
 
     if(demDic.found("cyclicPatches"))
     {
@@ -360,6 +478,357 @@ recordSimulation_(readBool(HFDIBDEMDict_.lookup("recordSimulation")))
 //---------------------------------------------------------------------------//
 openHFDIBDEM::~openHFDIBDEM()
 {}
+//---------------------------------------------------------------------------//
+vector openHFDIBDEM::movingWallPatchPlanePoint
+(
+    const string& wallName
+) const
+{
+    const wallMotionState& motionState = wallMotionInfo::state(wallName);
+    const word& sourcePatch = motionState.sourcePatch();
+    const label patchId = mesh_.boundaryMesh().findPatchID(sourcePatch);
+
+    if (patchId < 0)
+    {
+        FatalErrorInFunction
+            << "Cannot find mesh boundary patch '" << sourcePatch
+            << "' for moving DEM wall '" << wallName << "'."
+            << exit(FatalError);
+    }
+
+    const vectorField& patchCf = mesh_.Cf().boundaryField()[patchId];
+    const vectorField& patchSf = mesh_.Sf().boundaryField()[patchId];
+
+    scalar patchArea = 0;
+    vector areaWeightedCenter(vector::zero);
+    vector areaVector(vector::zero);
+
+    forAll(patchSf, faceI)
+    {
+        const scalar faceArea = mag(patchSf[faceI]);
+
+        patchArea += faceArea;
+        areaWeightedCenter += faceArea*patchCf[faceI];
+        areaVector += patchSf[faceI];
+    }
+
+    reduce(patchArea, sumOp<scalar>());
+    reduce(areaWeightedCenter, sumOp<vector>());
+    reduce(areaVector, sumOp<vector>());
+
+    if (patchArea <= VSMALL || mag(areaVector) <= VSMALL)
+    {
+        FatalErrorInFunction
+            << "Moving DEM wall '" << wallName << "' is linked to patch '"
+            << sourcePatch << "', but its global area is zero."
+            << exit(FatalError);
+    }
+
+    const vector planePoint(areaWeightedCenter/patchArea);
+    const vector patchNormal(areaVector/mag(areaVector));
+
+    const vector configuredNormal
+    (
+        wallPlaneInfo::getWallPlaneInfo()[wallName][0]
+    );
+
+    if (mag(configuredNormal) <= VSMALL)
+    {
+        FatalErrorInFunction
+            << "Moving DEM wall '" << wallName << "' has a zero nVec."
+            << exit(FatalError);
+    }
+
+    const vector normalHat(configuredNormal/mag(configuredNormal));
+
+    if ((normalHat & patchNormal) < 1.0 - 1e-6)
+    {
+        FatalErrorInFunction
+            << "Normal mismatch for moving DEM wall '" << wallName << "'." << nl
+            << "Configured nVec: " << normalHat << nl
+            << "Mesh patch normal: " << patchNormal << nl
+            << "Source patch: " << sourcePatch
+            << exit(FatalError);
+    }
+
+    scalar maxPlaneDistance = 0;
+
+    forAll(patchCf, faceI)
+    {
+        maxPlaneDistance = max
+        (
+            maxPlaneDistance,
+            mag((patchCf[faceI] - planePoint) & normalHat)
+        );
+    }
+
+    reduce(maxPlaneDistance, maxOp<scalar>());
+
+    const scalar planeTolerance =
+        max(scalar(1e-10), scalar(1e-8)*mag(mesh_.bounds().span()));
+
+    if (maxPlaneDistance > planeTolerance)
+    {
+        FatalErrorInFunction
+            << "Mesh patch '" << sourcePatch << "' for moving DEM wall '"
+            << wallName << "' is not planar within tolerance "
+            << planeTolerance << ". Maximum distance is "
+            << maxPlaneDistance << "."
+            << exit(FatalError);
+    }
+
+    return planePoint;
+}
+//---------------------------------------------------------------------------//
+void openHFDIBDEM::setMovingWallsAtFraction(const scalar fraction)
+{
+    const scalar alpha = min(max(fraction, scalar(0)), scalar(1));
+    const List<string> movingWalls(wallMotionInfo::all().sortedToc());
+
+    forAll(movingWalls, wallI)
+    {
+        const string& wallName = movingWalls[wallI];
+        const wallMotionState& motionState = wallMotionInfo::state(wallName);
+
+        const vector planePoint =
+            (1.0 - alpha)*motionState.previousPlanePoint()
+          + alpha*motionState.nextPlanePoint();
+
+        wallPlaneInfo::setWallPlanePoint(wallName, planePoint);
+
+        if
+        (
+            wallPlaneInfo::getWallFiniteInfo().found(wallName)
+         && wallPlaneInfo::getWallFiniteInfo()[wallName]
+        )
+        {
+            vector minBound =
+                wallPlaneInfo::getWallMinBoundInfo()[wallName];
+
+            vector maxBound =
+                wallPlaneInfo::getWallMaxBoundInfo()[wallName];
+
+            const label normalDirection = dominantWallDirection
+            (
+                wallPlaneInfo::getWallPlaneInfo()[wallName][0]
+            );
+
+            // The finite-wall algorithm uses only tangential bounds.  Keeping
+            // the normal components on the moving plane makes the registry
+            // geometrically self-consistent without altering that algorithm.
+            minBound[normalDirection] = planePoint[normalDirection];
+            maxBound[normalDirection] = planePoint[normalDirection];
+
+            wallPlaneInfo::setWallFiniteBounds
+            (
+                wallName,
+                minBound,
+                maxBound
+            );
+        }
+    }
+
+    const List<string> followerWalls(wallSupportLeader_.sortedToc());
+
+    forAll(followerWalls, wallI)
+    {
+        const string& followerWall = followerWalls[wallI];
+        const string& leaderWall = wallSupportLeader_[followerWall];
+
+        const vector& leaderPoint =
+            wallPlaneInfo::getWallPlaneInfo()[leaderWall][1];
+
+        const label leaderNormalDirection = dominantWallDirection
+        (
+            wallPlaneInfo::getWallPlaneInfo()[leaderWall][0]
+        );
+
+        vector minBound =
+            wallPlaneInfo::getWallMinBoundInfo()[followerWall];
+
+        vector maxBound =
+            wallPlaneInfo::getWallMaxBoundInfo()[followerWall];
+
+        if (wallSupportBound_[followerWall] == "max")
+        {
+            maxBound[leaderNormalDirection] =
+                leaderPoint[leaderNormalDirection];
+        }
+        else
+        {
+            minBound[leaderNormalDirection] =
+                leaderPoint[leaderNormalDirection];
+        }
+
+        wallPlaneInfo::setWallFiniteBounds
+        (
+            followerWall,
+            minBound,
+            maxBound
+        );
+    }
+}
+//---------------------------------------------------------------------------//
+void openHFDIBDEM::resetMovingWallsFromMesh()
+{
+    const List<string> movingWalls(wallMotionInfo::all().sortedToc());
+
+    forAll(movingWalls, wallI)
+    {
+        const string& wallName = movingWalls[wallI];
+        const vector planePoint = movingWallPatchPlanePoint(wallName);
+
+        wallMotionState& motionState = wallMotionInfo::state(wallName);
+        motionState.setPreviousPlanePoint(planePoint);
+        motionState.setNextPlanePoint(planePoint);
+        motionState.setVelocity(vector::zero);
+        motionState.setTimeIndex(mesh_.time().timeIndex());
+
+        Info<< " -- initialized moving DEM wall " << wallName
+            << " from patch " << motionState.sourcePatch()
+            << " at " << planePoint << endl;
+    }
+
+    setMovingWallsAtFraction(1.0);
+}
+//---------------------------------------------------------------------------//
+void openHFDIBDEM::updateMovingWallsFromMesh()
+{
+    const List<string> movingWalls(wallMotionInfo::all().sortedToc());
+    const label currentTimeIndex = mesh_.time().timeIndex();
+    const scalar deltaTime = mesh_.time().deltaT().value();
+
+    forAll(movingWalls, wallI)
+    {
+        const string& wallName = movingWalls[wallI];
+        wallMotionState& motionState = wallMotionInfo::state(wallName);
+
+        if (motionState.timeIndex() != currentTimeIndex)
+        {
+            motionState.setPreviousPlanePoint
+            (
+                motionState.nextPlanePoint()
+            );
+            motionState.setTimeIndex(currentTimeIndex);
+        }
+
+        const vector nextPlanePoint = movingWallPatchPlanePoint(wallName);
+
+        const vector displacement =
+            nextPlanePoint - motionState.previousPlanePoint();
+
+        const vector normal =
+            wallPlaneInfo::getWallPlaneInfo()[wallName][0]
+           /mag(wallPlaneInfo::getWallPlaneInfo()[wallName][0]);
+
+        const vector tangentialDisplacement =
+            displacement - normal*(displacement & normal);
+
+        const scalar motionTolerance =
+            max(scalar(1e-10), scalar(1e-8)*mag(mesh_.bounds().span()));
+
+        if (mag(tangentialDisplacement) > motionTolerance)
+        {
+            FatalErrorInFunction
+                << "Moving DEM wall '" << wallName
+                << "' has tangential displacement "
+                << tangentialDisplacement << "." << nl
+                << "Only translation along the fixed wall normal is supported."
+                << exit(FatalError);
+        }
+
+        motionState.setNextPlanePoint(nextPlanePoint);
+
+        if (deltaTime > VSMALL)
+        {
+            motionState.setVelocity
+            (
+                normal*(displacement & normal)/deltaTime
+            );
+        }
+        else
+        {
+            motionState.setVelocity(vector::zero);
+        }
+    }
+
+    // CFD and body reconstruction use the end-of-step mesh.  DEM contact
+    // later interpolates back through this same interval.
+    setMovingWallsAtFraction(1.0);
+}
+//---------------------------------------------------------------------------//
+void openHFDIBDEM::writeMovingWallDEMForces
+(
+    const List<string>& wallNames,
+    const List<vector>& wallImpulses,
+    const scalar deltaTime
+) const
+{
+    if (!Pstream::master() || wallNames.size() == 0 || deltaTime <= VSMALL)
+    {
+        return;
+    }
+
+    const fileName caseDir
+    (
+        mesh_.time().rootPath()/mesh_.time().globalCaseName()
+    );
+
+    const fileName postDir(caseDir/"postProcessing");
+    const fileName forceDir(postDir/"movingWallDEMForces");
+    const fileName forceFile(forceDir/"force.dat");
+
+    if (!isDir(postDir))
+    {
+        mkDir(postDir);
+    }
+
+    if (!isDir(forceDir))
+    {
+        mkDir(forceDir);
+    }
+
+    const bool writeHeader = !isFile(forceFile);
+    std::ofstream output(forceFile.c_str(), std::ios::out | std::ios::app);
+
+    if (!output.good())
+    {
+        FatalErrorInFunction
+            << "Cannot open moving-wall DEM force file " << forceFile
+            << exit(FatalError);
+    }
+
+    output << std::setprecision(12);
+
+    if (writeHeader)
+    {
+        output << "# Time wall Px Py Pz Ux Uy Uz Fx Fy Fz" << std::endl;
+        output << "# Force is the DEM reaction on the wall, averaged over the CFD step."
+               << std::endl;
+    }
+
+    forAll(wallNames, wallI)
+    {
+        const wallMotionState& motionState =
+            wallMotionInfo::state(wallNames[wallI]);
+
+        const vector& planePoint = motionState.nextPlanePoint();
+        const vector& wallVelocity = motionState.velocity();
+        const vector meanForce(wallImpulses[wallI]/deltaTime);
+
+        output << mesh_.time().value() << ' '
+               << wallNames[wallI] << ' '
+               << planePoint[0] << ' '
+               << planePoint[1] << ' '
+               << planePoint[2] << ' '
+               << wallVelocity[0] << ' '
+               << wallVelocity[1] << ' '
+               << wallVelocity[2] << ' '
+               << meanForce[0] << ' '
+               << meanForce[1] << ' '
+               << meanForce[2] << std::endl;
+    }
+}
 //---------------------------------------------------------------------------//
 void openHFDIBDEM::initialize
 (
@@ -894,6 +1363,35 @@ void openHFDIBDEM::updateDEM(volScalarField& body,volScalarField& refineF)
     HashTable <label,Tuple2<label, label>,Hash<Tuple2<label, label>>> syncOutForceKeyTable;
     HashTable <label,Tuple2<label, label>,Hash<Tuple2<label, label>>> contactResolvedKeyTable;
     HashTable <label,label,Hash<label>> wallContactIBTable;
+
+    const List<string> movingWallNames
+    (
+        wallMotionInfo::all().sortedToc()
+    );
+
+    forAll(movingWallNames, movingWallI)
+    {
+        const wallMotionState& motionState =
+            wallMotionInfo::state(movingWallNames[movingWallI]);
+
+        if (motionState.timeIndex() != mesh_.time().timeIndex())
+        {
+            FatalErrorInFunction
+                << "Moving DEM wall '" << movingWallNames[movingWallI]
+                << "' was not updated for CFD time "
+                << mesh_.time().timeName() << "." << nl
+                << "Call updateMovingWallsFromMesh() immediately after "
+                << "mesh.update() before updateDEM()."
+                << exit(FatalError);
+        }
+    }
+
+    List<vector> movingWallImpulses
+    (
+        movingWallNames.size(),
+        vector::zero
+    );
+
     while( pos < 1)
     {
         bodiesPositionList[Pstream::myProcNo()].clear();
@@ -950,6 +1448,10 @@ void openHFDIBDEM::updateDEM(volScalarField& body,volScalarField& refineF)
 
         bodiesPositionList[Pstream::myProcNo()].clear();
 
+        // Particle positions above are at the end of this DEM substep.
+        // Evaluate contact against the piston at that same fractional time.
+        setMovingWallsAtFraction(pos + step);
+
         verletList_.update(immersedBodies_);
 
         DynamicLabelList wallContactIB;
@@ -973,7 +1475,12 @@ void openHFDIBDEM::updateDEM(volScalarField& body,volScalarField& refineF)
                     ))
                     {
                         cIb.getibContactClass().setWallContact(true);
-                        cIb.getibContactClass().inContactWithStatic(true);
+
+                        if (cIb.getWallCntInfo().hasStaticContactPatch())
+                        {
+                            cIb.getibContactClass().inContactWithStatic(true);
+                        }
+
                         wallContactIB.append(bodyId);
                         wallContactIBTable.insert(bodyId,wallContactIB.size()-1);
                         // cIb.getWallCntInfo().registerSubContactList(wallContactList);
@@ -1018,6 +1525,30 @@ void openHFDIBDEM::updateDEM(volScalarField& body,volScalarField& refineF)
                     sCW->setResolvedContact(resolved);
                     wallContactResolvedList[assignProc] += resolved;
                     wallcRList[sC] = resolved;
+
+                    if (resolved && sCW->getContactPatches().size() == 1)
+                    {
+                        const string& wallName =
+                            sCW->getContactPatches()[0];
+
+                        if (wallMotionInfo::isMoving(wallName))
+                        {
+                            forAll(movingWallNames, movingWallI)
+                            {
+                                if (movingWallNames[movingWallI] == wallName)
+                                {
+                                    // getOutForce() is the force on the
+                                    // particle.  The wall reaction has the
+                                    // opposite sign.  Accumulate impulse so
+                                    // variable DEM substeps are handled.
+                                    movingWallImpulses[movingWallI] -=
+                                        sCW->getOutForce().F
+                                       *(deltaTime*step);
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1266,6 +1797,19 @@ void openHFDIBDEM::updateDEM(volScalarField& body,volScalarField& refineF)
 //OS Time effitiency Testing
         // demItegrationTime_ = DEMIntergrationRun.timeIncrement();
 //OS Time effitiency Testing
+    }
+
+    setMovingWallsAtFraction(1.0);
+
+    if (movingWallNames.size() > 0)
+    {
+        reduce(movingWallImpulses, sumOp<List<vector>>());
+        writeMovingWallDEMForces
+        (
+            movingWallNames,
+            movingWallImpulses,
+            deltaTime
+        );
     }
 }
 //---------------------------------------------------------------------------//

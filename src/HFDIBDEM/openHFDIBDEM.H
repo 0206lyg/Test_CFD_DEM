@@ -123,10 +123,27 @@ namespace Foam
     // Verlet list object
     verletList verletList_;
 
+    // Optional dynamic support limits for otherwise static finite walls.
+    // The key is the follower wall and the value is the moving wall whose
+    // plane limits either the follower's min or max bound.
+    HashTable<string,string,Hash<string>> wallSupportLeader_;
+    HashTable<word,string,Hash<string>> wallSupportBound_;
+
     //record simulation for start from lastTime possibility
     bool recordSimulation_;
     bool recordFirstTimeStep_ = false;
     word recordOutDir_;
+
+    vector movingWallPatchPlanePoint(const string& wallName) const;
+
+    void setMovingWallsAtFraction(const scalar fraction);
+
+    void writeMovingWallDEMForces
+    (
+        const List<string>& wallNames,
+        const List<vector>& wallImpulses,
+        const scalar deltaTime
+    ) const;
 
     public:
 
@@ -169,6 +186,12 @@ namespace Foam
     );
 
     void recreateBodies(volScalarField& body,volScalarField& refineF,const bool dynamicMesh = false);
+
+    // Reset is used during initial mesh setup.  Update is used immediately
+    // after mesh.update() on every transient time level.
+    void resetMovingWallsFromMesh();
+    void updateMovingWallsFromMesh();
+
     // void for DEM inner-loops
     void updateDEM(volScalarField& body,volScalarField& refineF);
 
