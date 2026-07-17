@@ -34,6 +34,7 @@ Contributors
 
 #include "virtualMeshLevel.H"
 #include "wallPlaneInfo.H"
+#include "wallMotionInfo.H"
 
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
@@ -92,6 +93,19 @@ label wallNormalDirectionContact(const string& wallName)
     }
 
     return 2;
+}
+
+bool containsStaticWall(const List<string>& contactPatches)
+{
+    forAll(contactPatches, patchI)
+    {
+        if (!wallMotionInfo::isMoving(contactPatches[patchI]))
+        {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 }
@@ -246,7 +260,11 @@ bool detectWallContact_Cluster(
             );
 
             cIbClassI.setWallContact(true);
-            cIbClassI.inContactWithStatic(true);
+
+            if (containsStaticWall(tmpWallCntI.getContactPatches()))
+            {
+                cIbClassI.inContactWithStatic(true);
+            }
         }
 
         if(cIbClassI.checkWallContact())
@@ -482,7 +500,11 @@ void getWallContactVars_ArbShape(
         contactNormal /=mag(contactNormal);
         // Pout << "contactNormal " << contactNormal << endl;
         wallCntInfo.getcClass().setWallContact(true);
-        wallCntInfo.getcClass().inContactWithStatic(true);
+
+        if (containsStaticWall(contactPatches))
+        {
+            wallCntInfo.getcClass().inContactWithStatic(true);
+        }
         // Pout << "Survived #1 " << endl;
         wallContactVars& wallCntVars = sCW.getWallCntVars();
         // Pout << "Survived #2 " << endl;
@@ -497,6 +519,12 @@ void getWallContactVars_ArbShape(
             contactAreas(),
             contactPatches,
             wallCntInfo.getWallMeanPars()
+        );
+
+        wallCntVars.setWallVelocity_Plane
+        (
+            contactAreas(),
+            contactPatches
         );
         // Pout << "Survived #4 " << endl;
     }
@@ -566,10 +594,20 @@ void getWallContactVars_Sphere(
         wallCntInfo.getWallMeanPars()
     );
 
+    wallCntVars.setWallVelocity_Plane
+    (
+        contactAreas,
+        contactPatches
+    );
+
     if(wallCntVars.contactVolume_ > 0)
     {
         wallCntInfo.getcClass().setWallContact(true);
-        wallCntInfo.getcClass().inContactWithStatic(true);
+
+        if (containsStaticWall(contactPatches))
+        {
+            wallCntInfo.getcClass().inContactWithStatic(true);
+        }
     }
 }
 //---------------------------------------------------------------------------//

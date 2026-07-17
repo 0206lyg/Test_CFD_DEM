@@ -53,6 +53,7 @@ Contributors
 #include "virtualMeshWall.H"
 #include "wallSubContactInfo.H"
 #include "wallPlaneInfo.H"
+#include "wallMotionInfo.H"
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -215,6 +216,19 @@ class wallContactInfo
     List<string>& getContactPatches()
     {
         return contactPatches_;
+    }
+
+    bool hasStaticContactPatch() const
+    {
+        forAll(contactPatches_, patchI)
+        {
+            if (!wallMotionInfo::isMoving(contactPatches_[patchI]))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // void addSCToEnd

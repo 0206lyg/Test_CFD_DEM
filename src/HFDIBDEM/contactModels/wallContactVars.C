@@ -30,6 +30,7 @@ Contributors
     Ondřej Studeník (2020-*)
 \*---------------------------------------------------------------------------*/
 #include "wallContactVars.H"
+#include "wallMotionInfo.H"
 
 using namespace Foam;
 
@@ -106,5 +107,27 @@ void wallContactVars::setMeanCntPars_Plane
     physicalProperties_.aMu_ /= overallArea;
     physicalProperties_.maxAdhN_ /= overallArea;
     physicalProperties_.reduceBeta_ /= overallArea;
+}
+//---------------------------------------------------------------------------//
+void wallContactVars::setWallVelocity_Plane
+(
+    const List<scalar>& contactAreas,
+    const List<string>& contactFaces
+)
+{
+    scalar overallArea = 0;
+    wallVelocity_ = vector::zero;
+
+    forAll(contactFaces, faceI)
+    {
+        const scalar area = contactAreas[faceI];
+        overallArea += area;
+        wallVelocity_ += area*wallMotionInfo::velocity(contactFaces[faceI]);
+    }
+
+    if (overallArea > VSMALL)
+    {
+        wallVelocity_ /= overallArea;
+    }
 }
 //---------------------------------------------------------------------------//

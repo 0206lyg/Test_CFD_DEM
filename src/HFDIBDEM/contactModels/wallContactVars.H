@@ -59,6 +59,8 @@ class wallContactVars
 
     vector lVec_;
     vector Veli_;
+    vector wallVelocity_;
+    vector relativeVelocity_;
     scalar Vn_;
     scalar Lc_;
     scalar curAdhN_;    // Current contact adhesive coef
@@ -77,6 +79,8 @@ class wallContactVars
 
         lVec_ = vector::zero;
         Veli_ = vector::zero;
+        wallVelocity_ = vector::zero;
+        relativeVelocity_ = vector::zero;
         Vn_ = 0;
         Lc_ = 0;
         curAdhN_ = 0;
@@ -100,6 +104,12 @@ class wallContactVars
         HashTable<physicalProperties,string,Hash<string>>& wallMeanPars
     );
 
+    void setWallVelocity_Plane
+    (
+        const List<scalar>& contactAreas,
+        const List<string>& contactFaces
+    );
+
     physicalProperties& getMeanCntPar()
     {
         return physicalProperties_;
@@ -114,6 +124,8 @@ class wallContactVars
 
         lVec_ = vector::zero;
         Veli_ = vector::zero;
+        wallVelocity_ = vector::zero;
+        relativeVelocity_ = vector::zero;
         Vn_ = 0;
         Lc_ = 0;
         curAdhN_ = 0;

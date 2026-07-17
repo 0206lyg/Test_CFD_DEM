@@ -461,7 +461,11 @@ void wallSubContactInfo::evalVariables(
     // wallCntvar.lVec_ = wallCntvar.contactCenter_ - ibCClass.getGeomModel().getCoM();
     wallCntvar.Veli_ = getVeli(wallCntvar, cVars);
 
-    wallCntvar.Vn_ = -(wallCntvar.Veli_ - vector::zero) & wallCntvar.contactNormal_;
+    wallCntvar.relativeVelocity_ =
+        wallCntvar.Veli_ - wallCntvar.wallVelocity_;
+
+    wallCntvar.Vn_ =
+        -(wallCntvar.relativeVelocity_ & wallCntvar.contactNormal_);
     wallCntvar.Lc_ = (contactModelInfo::getLcCoeff())*mag(wallCntvar.lVec_)*mag(wallCntvar.lVec_)/(mag(wallCntvar.lVec_) + mag(wallCntvar.lVec_));
     
 
@@ -507,11 +511,12 @@ vector wallSubContactInfo::getFt(wallContactVars& wallCntvar, scalar deltaT)
     // scale projected Ft to have same magnitude as FtLast
     vector FtLastS(mag(wallCntvar.FtPrev_) * (FtLastP/(mag(FtLastP)+SMALL)));
     // Orthogonal projection of relative velocity onto the wall normal.
-    const vector cVeliNorm =
+    const vector relativeVelocityNorm =
         wallCntvar.contactNormal_
-       *(wallCntvar.Veli_ & wallCntvar.contactNormal_);
+       *(wallCntvar.relativeVelocity_ & wallCntvar.contactNormal_);
 
-    const vector Vt = wallCntvar.Veli_ - cVeliNorm;
+    const vector Vt =
+        wallCntvar.relativeVelocity_ - relativeVelocityNorm;
     // compute tangential force
     if(contactModelInfo::getUseMindlinRotationalModel())
     {
