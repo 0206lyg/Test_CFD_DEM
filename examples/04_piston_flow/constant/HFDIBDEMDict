@@ -24,6 +24,7 @@ interpolationSchemes
 }
 
 surfaceThreshold    1e-4;
+// Fraction of the current CFD time step: deltaT_DEM = stepDEM*deltaT_CFD.
 stepDEM     0.01;
 geometricD (1 1 1);
 recordSimulation true;
@@ -72,6 +73,29 @@ DEM
 	
     collisionPatches
     {
+        // ------------------------------------------------------------
+        // Translating piston.  The OpenFOAM boundary patch is the sole
+        // source of its position and velocity.
+        // ------------------------------------------------------------
+
+        piston
+        {
+            material    wall;
+            nVec        (0 1 0);
+            planePoint  (0 0.15 0);
+
+            finitePatch true;
+            minBound    (-0.04 0.15 -0.04);
+            maxBound    ( 0.04 0.15  0.04);
+            pad         1e-7;
+
+            motion
+            {
+                type    meshPatchTranslation;
+                patch   topOpen;
+            }
+        }
+
         // ------------------------------------------------------------
         // Downstream small channel walls
         // y = 0 to 0.05
@@ -142,6 +166,13 @@ DEM
             minBound    (-0.04 0.05 -0.04);
             maxBound    (-0.04 0.15  0.04);
             pad         1e-7;
+
+            supportLimit
+            {
+                type    followWall;
+                wall    piston;
+                bound   max;
+            }
         }
 
         xMax_large
@@ -154,6 +185,13 @@ DEM
             minBound    (0.04 0.05 -0.04);
             maxBound    (0.04 0.15  0.04);
             pad         1e-7;
+
+            supportLimit
+            {
+                type    followWall;
+                wall    piston;
+                bound   max;
+            }
         }
 
         zMin_large
@@ -166,6 +204,13 @@ DEM
             minBound    (-0.04 0.05 -0.04);
             maxBound    ( 0.04 0.15 -0.04);
             pad         1e-7;
+
+            supportLimit
+            {
+                type    followWall;
+                wall    piston;
+                bound   max;
+            }
         }
 
         zMax_large
@@ -178,10 +223,17 @@ DEM
             minBound    (-0.04 0.05 0.04);
             maxBound    ( 0.04 0.15 0.04);
             pad         1e-7;
+
+            supportLimit
+            {
+                type    followWall;
+                wall    piston;
+                bound   max;
+            }
         }
 
         // ------------------------------------------------------------
-        // Contraction shoulder at y = 0.005
+        // Contraction shoulder at y = 0.05
         // central opening is excluded
         // opening x,z = -0.01 to 0.01
         //
@@ -302,4 +354,3 @@ PH_SC_reservoir
 }
 
 // ************************************************************************* //
-
