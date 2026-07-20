@@ -981,26 +981,27 @@ scalar virtualMeshWall::evaluateFiniteAreaCell
     point& occupiedCenter
 )
 {
-    if
-    (
-        !finiteWallGeometry_
-     || !finiteWallGeometry_->planeIntersectsCell(cellBB)
-    )
+    if (!finiteWallGeometry_)
     {
         return 0;
     }
 
-    const pointField boxPoints = cellBB.points();
-    scalar minDistance = GREAT;
-    scalar maxDistance = -GREAT;
+    scalar minDistance = 0;
+    scalar maxDistance = 0;
+    finiteWallGeometry_->planeDistanceRange
+    (
+        cellBB,
+        minDistance,
+        maxDistance
+    );
 
-    forAll(boxPoints, pointI)
+    if
+    (
+        minDistance > finiteWallGeometry_->tolerance()
+     || maxDistance < -finiteWallGeometry_->tolerance()
+    )
     {
-        const scalar distance =
-            finiteWallGeometry_->signedDistance(boxPoints[pointI]);
-
-        minDistance = min(minDistance, distance);
-        maxDistance = max(maxDistance, distance);
+        return 0;
     }
 
     // When the wall plane coincides with a Cartesian cell face, only the
