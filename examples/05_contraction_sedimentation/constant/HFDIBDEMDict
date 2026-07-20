@@ -73,120 +73,152 @@ DEM
     collisionPatches
     {
         // ------------------------------------------------------------
-        // Downstream small channel walls
-        // y = 0 to 0.05
-        // x,z = -0.01 to 0.01
+        // Downstream 0.02 x 0.02 channel rotated 45 degrees about y.
+        // All four patches are finite, inclined polygons.  This is the
+        // regression geometry for orientation-independent wall contact.
         // ------------------------------------------------------------
 
         xMin_small
         {
             material    wall;
-            nVec        (-1 0 0);
-            planePoint  (-0.01 0 0);
+            nVec        (-0.707106781187 0 -0.707106781187);
+            planePoint  (-0.00707106781187 0 -0.00707106781187);
 
             finitePatch true;
-            minBound    (-0.01 0.00 -0.01);
-            maxBound    (-0.01 0.05  0.01);
-            pad         1e-7;
+            vertices
+            (
+                ( 0                 0.00 -0.0141421356237)
+                ( 0                 0.05 -0.0141421356237)
+                (-0.0141421356237   0.05  0)
+                (-0.0141421356237   0.00  0)
+            );
         }
 
         xMax_small
         {
             material    wall;
-            nVec        (1 0 0);
-            planePoint  (0.01 0 0);
+            nVec        (0.707106781187 0 0.707106781187);
+            planePoint  (0.00707106781187 0 0.00707106781187);
 
             finitePatch true;
-            minBound    (0.01 0.00 -0.01);
-            maxBound    (0.01 0.05  0.01);
-            pad         1e-7;
+            vertices
+            (
+                (0.0141421356237  0.00 0)
+                (0.0141421356237  0.05 0)
+                (0                0.05 0.0141421356237)
+                (0                0.00 0.0141421356237)
+            );
         }
 
         zMin_small
         {
             material    wall;
-            nVec        (0 0 -1);
-            planePoint  (0 0 -0.01);
+            nVec        (0.707106781187 0 -0.707106781187);
+            planePoint  (0.00707106781187 0 -0.00707106781187);
 
             finitePatch true;
-            minBound    (-0.01 0.00 -0.01);
-            maxBound    ( 0.01 0.05 -0.01);
-            pad         1e-7;
+            vertices
+            (
+                (0                 0.00 -0.0141421356237)
+                (0                 0.05 -0.0141421356237)
+                (0.0141421356237   0.05  0)
+                (0.0141421356237   0.00  0)
+            );
         }
 
         zMax_small
         {
             material    wall;
-            nVec        (0 0 1);
-            planePoint  (0 0 0.01);
+            nVec        (-0.707106781187 0 0.707106781187);
+            planePoint  (-0.00707106781187 0 0.00707106781187);
 
             finitePatch true;
-            minBound    (-0.01 0.00 0.01);
-            maxBound    ( 0.01 0.05 0.01);
-            pad         1e-7;
+            vertices
+            (
+                (-0.0141421356237  0.00 0)
+                (-0.0141421356237  0.05 0)
+                (0                 0.05 0.0141421356237)
+                (0                 0.00 0.0141421356237)
+            );
         }
 
         // ------------------------------------------------------------
-        // Upstream large chamber walls
-        // y = 0.05 to 0.10
-        // x,z = -0.04 to 0.04
+        // Upstream 0.08 x 0.08 chamber, rotated by the same 45 degrees.
+        // These four walls are finite polygons over the physical chamber
+        // height.  This routes inclined corner contacts through the same
+        // orientation-independent finite-wall path as the small channel.
         // ------------------------------------------------------------
 
         xMin_large
         {
             material    wall;
-            nVec        (-1 0 0);
-            planePoint  (-0.04 0 0);
+            nVec        (-0.707106781187 0 -0.707106781187);
+            planePoint  (-0.0282842712475 0 -0.0282842712475);
 
-            //finitePatch true;
-            //minBound    (-0.04 0.05 -0.04);
-            //maxBound    (-0.04 0.15  0.04);
-            //pad         1e-7;
+            finitePatch true;
+            vertices
+            (
+                ( 0                0.05 -0.056568542495)
+                ( 0                0.15 -0.056568542495)
+                (-0.056568542495   0.15  0)
+                (-0.056568542495   0.05  0)
+            );
         }
 
         xMax_large
         {
             material    wall;
-            nVec        (1 0 0);
-            planePoint  (0.04 0 0);
+            nVec        (0.707106781187 0 0.707106781187);
+            planePoint  (0.0282842712475 0 0.0282842712475);
 
-            //finitePatch true;
-            //minBound    (0.04 0.05 -0.04);
-            //maxBound    (0.04 0.15  0.04);
-            //pad         1e-7;
+            finitePatch true;
+            vertices
+            (
+                (0.056568542495  0.05 0)
+                (0.056568542495  0.15 0)
+                (0               0.15 0.056568542495)
+                (0               0.05 0.056568542495)
+            );
         }
 
         zMin_large
         {
             material    wall;
-            nVec        (0 0 -1);
-            planePoint  (0 0 -0.04);
+            nVec        (0.707106781187 0 -0.707106781187);
+            planePoint  (0.0282842712475 0 -0.0282842712475);
 
-            //finitePatch true;
-            //minBound    (-0.04 0.05 -0.04);
-            //maxBound    ( 0.04 0.15 -0.04);
-            //pad         1e-7;
+            finitePatch true;
+            vertices
+            (
+                (0               0.05 -0.056568542495)
+                (0               0.15 -0.056568542495)
+                (0.056568542495  0.15  0)
+                (0.056568542495  0.05  0)
+            );
         }
 
         zMax_large
         {
             material    wall;
-            nVec        (0 0 1);
-            planePoint  (0 0 0.04);
+            nVec        (-0.707106781187 0 0.707106781187);
+            planePoint  (-0.0282842712475 0 0.0282842712475);
 
-            //finitePatch true;
-            //minBound    (-0.04 0.05 0.04);
-            //maxBound    ( 0.04 0.15 0.04);
-            //pad         1e-7;
+            finitePatch true;
+            vertices
+            (
+                (-0.056568542495  0.05 0)
+                (-0.056568542495  0.15 0)
+                (0                0.15 0.056568542495)
+                (0                0.05 0.056568542495)
+            );
         }
 
         // ------------------------------------------------------------
-        // Contraction shoulder at y = 0.05
-        // central opening is excluded
-        // opening x,z = -0.01 to 0.01
+        // Rotated contraction shoulder at y = 0.05.  The four convex
+        // polygons cover the large diamond except for the small opening.
         //
         // nVec = (0 -1 0)
-        // upstream side y > 0.005 is inside
+        // upstream side y > 0.05 is inside
         // penetration toward y < 0.05 through shoulder gives contact
         // ------------------------------------------------------------
 
@@ -197,9 +229,13 @@ DEM
             planePoint  (0 0.05 0);
 
             finitePatch true;
-            minBound    (-0.044 0.05  0.01);
-            maxBound    ( 0.044 0.05  0.044);
-            pad         1e-7;
+            vertices
+            (
+                (-0.0381837661841 0.05 -0.0240416305603)
+                ( 0.0240416305603 0.05  0.0381837661841)
+                ( 0                 0.05  0.0622253967444)
+                (-0.0622253967444 0.05  0)
+            );
         }
 
         shoulder_zMinus
@@ -209,9 +245,13 @@ DEM
             planePoint  (0 0.05 0);
 
             finitePatch true;
-            minBound    (-0.044 0.05 -0.044);
-            maxBound    ( 0.044 0.05 -0.01);
-            pad         1e-7;
+            vertices
+            (
+                ( 0                 0.05 -0.0622253967444)
+                ( 0.0622253967444  0.05  0)
+                ( 0.0381837661841  0.05  0.0240416305603)
+                (-0.0240416305603  0.05 -0.0381837661841)
+            );
         }
 
         shoulder_xPlus
@@ -221,9 +261,13 @@ DEM
             planePoint  (0 0.05 0);
 
             finitePatch true;
-            minBound    ( 0.01 0.05 -0.01);
-            maxBound    ( 0.044 0.05  0.01);
-            pad         1e-7;
+            vertices
+            (
+                (0.0141421356237 0.05 0)
+                (0.0381837661841 0.05 0.0240416305603)
+                (0.0240416305603 0.05 0.0381837661841)
+                (0               0.05 0.0141421356237)
+            );
         }
 
         shoulder_xMinus
@@ -233,9 +277,13 @@ DEM
             planePoint  (0 0.05 0);
 
             finitePatch true;
-            minBound    (-0.044 0.05 -0.01);
-            maxBound    (-0.01 0.05  0.01);
-            pad         1e-7;
+            vertices
+            (
+                (-0.0240416305603 0.05 -0.0381837661841)
+                ( 0                 0.05 -0.0141421356237)
+                (-0.0141421356237 0.05  0)
+                (-0.0381837661841 0.05 -0.0240416305603)
+            );
         }
         
         bottomWall
@@ -244,10 +292,14 @@ DEM
             nVec        (0 -1 0);
             planePoint  (0 0 0);
 
-          //  finitePatch true;
-          //  minBound    (-0.01 0.00 -0.01);
-          //  maxBound    ( 0.01 0.00  0.01);
-          //  pad         1e-7;
+            finitePatch true;
+            vertices
+            (
+                (-0.0141421356237 0 0)
+                (0 0 -0.0141421356237)
+                (0.0141421356237 0 0)
+                (0 0 0.0141421356237)
+            );
         }
         
     }
@@ -291,8 +343,11 @@ PH_SC_reservoir
             addDomain boundBox;
             boundBoxCoeffs
             {
-                minBound (-0.04 0.05 -0.04);
-                maxBound ( 0.04 0.15  0.04);
+                // The rotated chamber is a diamond in the global x-z plane.
+                // Keep random placement inside its inscribed square; the
+                // onceScatter model samples this Cartesian box directly.
+                minBound (-0.028 0.05 -0.028);
+                maxBound ( 0.028 0.15  0.028);
             }
 
             scalingMode    noScaling;
@@ -314,4 +369,3 @@ PH_SC_reservoir
 }
 
 // ************************************************************************* //
-
