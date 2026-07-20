@@ -45,6 +45,7 @@ Contributors
 #include "bbMatrix.H"
 #include "clockTime.H"
 #include "subVolumeProperties.H"
+#include "finiteWallGeometry.H"
 // #include ""
 
 
@@ -63,7 +64,8 @@ struct virtualMeshWallInfo
     subVolumeNVector(vector::zero),
     charCellSize(0),
     subVolumeV(0),
-    fitToBBox(false)
+    fitToBBox(false),
+    wallName("")
 
     {}
     virtualMeshWallInfo(
@@ -72,13 +74,15 @@ struct virtualMeshWallInfo
         vector subVolumeNVector,
         scalar charCellSize,
         scalar subVolumeV,
-        bool fitToBBox = false):
+        bool fitToBBox = false,
+        const string& finiteWallName = ""):
     bBox(bBox),
     startingPoint(startingPoint),
     subVolumeNVector(subVolumeNVector),
     charCellSize(charCellSize),
     subVolumeV(subVolumeV),
-    fitToBBox(fitToBBox)
+    fitToBBox(fitToBBox),
+    wallName(finiteWallName)
     {}
 
     const point& getStartingPoint()
@@ -99,6 +103,11 @@ struct virtualMeshWallInfo
     bool usesFittedBBoxGrid() const
     {
         return fitToBBox;
+    }
+
+    bool hasFiniteWallGeometry() const
+    {
+        return wallName.size() > 0;
     }
 
     void shiftBBox
@@ -129,6 +138,7 @@ struct virtualMeshWallInfo
     scalar charCellSize;
     scalar subVolumeV;
     bool fitToBBox;
+    string wallName;
 };
 
 /*---------------------------------------------------------------------------*\
@@ -152,6 +162,20 @@ class virtualMeshWall
 
     DynamicPointList edgeSubVolumesPoints_;
 
+    std::shared_ptr<const finiteWallGeometry> finiteWallGeometry_;
+
+    scalar evaluateFiniteCell
+    (
+        const boundBox& cellBB,
+        point& occupiedCenter
+    );
+
+    scalar evaluateFiniteAreaCell
+    (
+        const boundBox& cellBB,
+        point& occupiedCenter
+    );
+
     public:
     
     vector contactCenter_ = vector::zero;
@@ -173,6 +197,8 @@ class virtualMeshWall
     bool detectFirstFaceContactPoint();
 
     scalar evaluateContact();
+
+    scalar evaluateContactArea();
 
     void checkSubVolume
     (
