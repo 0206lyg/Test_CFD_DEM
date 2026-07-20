@@ -76,8 +76,14 @@ HashTable<vector,string,Hash<string>> wallPlaneInfo::wallMinBoundInfo_ =
 HashTable<vector,string,Hash<string>> wallPlaneInfo::wallMaxBoundInfo_ =
     HashTable<vector,string,Hash<string>>();
 
-HashTable<scalar,string,Hash<string>> wallPlaneInfo::wallPadInfo_ =
-    HashTable<scalar,string,Hash<string>>();
+HashTable<bool,string,Hash<string>> wallPlaneInfo::wallLegacyFastPathInfo_ =
+    HashTable<bool,string,Hash<string>>();
+
+HashTable<pointField,string,Hash<string>> wallPlaneInfo::wallPatchVerticesInfo_ =
+    HashTable<pointField,string,Hash<string>>();
+
+HashTable<label,string,Hash<string>> wallPlaneInfo::wallGeometryRevisionInfo_ =
+    HashTable<label,string,Hash<string>>();
 
 HashTable<wallMotionState,string,Hash<string>> wallMotionInfo::wallMotionInfo_ =
     HashTable<wallMotionState,string,Hash<string>>();
