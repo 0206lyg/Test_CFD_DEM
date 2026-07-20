@@ -43,6 +43,7 @@ Contributors
 #include <iostream>
 #include "defineExternVars.H"
 #include "parameters.H"
+#include "finiteWallGeometry.H"
 
 #define ORDER 2
 
@@ -255,14 +256,38 @@ recordSimulation_(readBool(HFDIBDEMDict_.lookup("recordSimulation")))
         bool finitePatch = false;
         vector minBound = vector::zero;
         vector maxBound = vector::zero;
-        scalar pad = 0.0;
 
         if (patchIDic.found("finitePatch"))
         {
            finitePatch = readBool(patchIDic.lookup("finitePatch"));
         }
 
-        if
+        if (finitePatch && patchIDic.found("vertices"))
+        {
+            pointField patchVertices(patchIDic.lookup("vertices"));
+
+            if (patchVertices.size() < 3)
+            {
+                FatalIOErrorInFunction(HFDIBDEMDict_)
+                    << "finite collisionPatch " << patchNames[patchI]
+                    << " needs at least three ordered vertices."
+                    << exit(FatalIOError);
+            }
+
+            wallPlaneInfo::wallPlaneInfo_insert
+            (
+                patchNames[patchI],
+                patchNVec,
+                planePoint,
+                patchVertices
+            );
+
+            Info<< " -- collisionPatch " << patchNames[patchI]
+                << " is treated as a finite polygon with "
+                << patchVertices.size() << " vertices"
+                << endl;
+        }
+        else if
         (
             finitePatch
         && patchIDic.found("minBound")
@@ -272,12 +297,6 @@ recordSimulation_(readBool(HFDIBDEMDict_.lookup("recordSimulation")))
             minBound = patchIDic.lookup("minBound");
             maxBound = patchIDic.lookup("maxBound");
 
-            if (patchIDic.found("pad"))
-            {
-                pad = readScalar(patchIDic.lookup("pad"));
-                pad = max(pad, scalar(0.0));
-            }
-
             wallPlaneInfo::wallPlaneInfo_insert
             (
                 patchNames[patchI],
@@ -285,15 +304,13 @@ recordSimulation_(readBool(HFDIBDEMDict_.lookup("recordSimulation")))
                 planePoint,
                 true,
                 minBound,
-                maxBound,
-                pad
+                maxBound
             );
 
             Info<< " -- collisionPatch " << patchNames[patchI]
                 << " is treated as finite patch"
                 << " minBound " << minBound
                 << " maxBound " << maxBound
-                << " pad " << pad
                 << endl;
        }
         else
@@ -301,12 +318,14 @@ recordSimulation_(readBool(HFDIBDEMDict_.lookup("recordSimulation")))
            if
             (
                finitePatch
+            && !patchIDic.found("vertices")
             && (!patchIDic.found("minBound") || !patchIDic.found("maxBound"))
             )
             {
                 Info<< " -- finitePatch requested for collisionPatch "
                     << patchNames[patchI]
-                    << " but minBound or maxBound is missing. "
+                    << " but neither vertices nor minBound/maxBound "
+                    << "is available. "
                     << "Treating it as an infinite wall."
                     << endl;
             }
@@ -317,6 +336,34 @@ recordSimulation_(readBool(HFDIBDEMDict_.lookup("recordSimulation")))
                 patchNVec,
                 planePoint
             );
+        }
+
+        if
+        (
+            wallPlaneInfo::getWallFiniteInfo().found(patchNames[patchI])
+         && wallPlaneInfo::getWallFiniteInfo()[patchNames[patchI]]
+        )
+        {
+            // Construct once during dictionary parsing so malformed,
+            // non-coplanar, or non-convex patches fail before body creation.
+            (void)finiteWallGeometry::lookup(patchNames[patchI]);
+
+            if
+            (
+                wallPlaneInfo::usesLegacyAxisAlignedFinitePath
+                (
+                    patchNames[patchI]
+                )
+            )
+            {
+                Info<< " -- finite-wall contact path: Git-main "
+                    << "axis-aligned rectangular fast path" << endl;
+            }
+            else
+            {
+                Info<< " -- finite-wall contact path: general polygon path"
+                    << endl;
+            }
         }
 
         wallMatInfo::wallMatInfo_insert
@@ -410,6 +457,18 @@ recordSimulation_(readBool(HFDIBDEMDict_.lookup("recordSimulation")))
             FatalIOErrorInFunction(HFDIBDEMDict_)
                 << "supportLimit requires finitePatch true for "
                 << followerWall
+                << exit(FatalIOError);
+        }
+
+        if
+        (
+            wallPlaneInfo::getWallPatchVerticesInfo().found(followerWall)
+        )
+        {
+            FatalIOErrorInFunction(HFDIBDEMDict_)
+                << "supportLimit is not defined for polygonal finite wall "
+                << followerWall << ".  It currently requires the legacy "
+                << "axis-aligned minBound/maxBound representation."
                 << exit(FatalIOError);
         }
     }
@@ -600,6 +659,7 @@ void openHFDIBDEM::setMovingWallsAtFraction(const scalar fraction)
         (
             wallPlaneInfo::getWallFiniteInfo().found(wallName)
          && wallPlaneInfo::getWallFiniteInfo()[wallName]
+         && !wallPlaneInfo::getWallPatchVerticesInfo().found(wallName)
         )
         {
             vector minBound =
