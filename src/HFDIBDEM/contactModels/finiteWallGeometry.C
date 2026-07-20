@@ -31,6 +31,9 @@ tangent1_(vector::zero),
 tangent2_(vector::zero),
 vertices_(),
 localVertices_(),
+localEdgeNormals_(),
+globalEdgeNormals_(),
+edgeOffsets_(),
 patchBounds_(boundBox()),
 tolerance_(1e-12),
 revision_(0)
@@ -308,6 +311,10 @@ void finiteWallGeometry::initialiseLocalGeometry()
         localVertices_ = reversedLocalVertices;
     }
 
+    localEdgeNormals_.setSize(localVertices_.size());
+    globalEdgeNormals_.setSize(localVertices_.size());
+    edgeOffsets_.setSize(localVertices_.size());
+
     forAll(localVertices_, vertexI)
     {
         const vector& a = localVertices_[vertexI];
@@ -325,7 +332,34 @@ void finiteWallGeometry::initialiseLocalGeometry()
                 << exit(FatalError);
         }
 
-        if (edgeValue(a, b, c) < -tolerance_)
+        const scalar edgeU = b[0] - a[0];
+        const scalar edgeV = b[1] - a[1];
+        const scalar inverseEdgeLength =
+            1.0/(Foam::sqrt(sqr(edgeU) + sqr(edgeV)) + VSMALL);
+
+        // For the now counter-clockwise polygon this is the inward unit
+        // normal of the edge in local coordinates.  The VSMALL term is kept
+        // so the stored affine predicate is algebraically identical to the
+        // former edgeValue() expression.
+        localEdgeNormals_[vertexI] = vector
+        (
+            -edgeV*inverseEdgeLength,
+             edgeU*inverseEdgeLength,
+             0
+        );
+
+        globalEdgeNormals_[vertexI] =
+            localEdgeNormals_[vertexI][0]*tangent1_
+          + localEdgeNormals_[vertexI][1]*tangent2_;
+
+        edgeOffsets_[vertexI] =
+            -(localEdgeNormals_[vertexI] & a);
+
+        if
+        (
+            (localEdgeNormals_[vertexI] & c)
+          + edgeOffsets_[vertexI] < -tolerance_
+        )
         {
             FatalErrorInFunction
                 << "Finite wall '" << wallName_
@@ -333,24 +367,6 @@ void finiteWallGeometry::initialiseLocalGeometry()
                 << exit(FatalError);
         }
     }
-}
-
-//---------------------------------------------------------------------------//
-scalar finiteWallGeometry::edgeValue
-(
-    const vector& edgeStart,
-    const vector& edgeEnd,
-    const vector& checkedPoint
-) const
-{
-    const scalar edgeU = edgeEnd[0] - edgeStart[0];
-    const scalar edgeV = edgeEnd[1] - edgeStart[1];
-    const scalar pointU = checkedPoint[0] - edgeStart[0];
-    const scalar pointV = checkedPoint[1] - edgeStart[1];
-
-    return
-        (edgeU*pointV - edgeV*pointU)
-       /(Foam::sqrt(sqr(edgeU) + sqr(edgeV)) + VSMALL);
 }
 
 //---------------------------------------------------------------------------//
@@ -387,13 +403,13 @@ bool finiteWallGeometry::containsLocalPoint
     const vector& localPoint
 ) const
 {
-    forAll(localVertices_, edgeI)
+    forAll(localEdgeNormals_, edgeI)
     {
-        const vector& edgeStart = localVertices_[edgeI];
-        const vector& edgeEnd =
-            localVertices_[(edgeI + 1) % localVertices_.size()];
-
-        if (edgeValue(edgeStart, edgeEnd, localPoint) < -tolerance_)
+        if
+        (
+            (localEdgeNormals_[edgeI] & localPoint)
+          + edgeOffsets_[edgeI] < -tolerance_
+        )
         {
             return false;
         }
@@ -423,18 +439,31 @@ bool finiteWallGeometry::pointInContactRegion
 }
 
 //---------------------------------------------------------------------------//
+void finiteWallGeometry::planeDistanceRange
+(
+    const boundBox& cellBB,
+    scalar& minDistance,
+    scalar& maxDistance
+) const
+{
+    const point center = cellBB.midpoint();
+    const vector halfSpan = 0.5*cellBB.span();
+    const scalar centerDistance = signedDistance(center);
+    const scalar radius =
+        mag(normal_[0])*halfSpan[0]
+      + mag(normal_[1])*halfSpan[1]
+      + mag(normal_[2])*halfSpan[2];
+
+    minDistance = centerDistance - radius;
+    maxDistance = centerDistance + radius;
+}
+
+//---------------------------------------------------------------------------//
 bool finiteWallGeometry::planeIntersectsCell(const boundBox& cellBB) const
 {
-    const pointField cellPoints = cellBB.points();
-    scalar minDistance = GREAT;
-    scalar maxDistance = -GREAT;
-
-    forAll(cellPoints, pointI)
-    {
-        const scalar distance = signedDistance(cellPoints[pointI]);
-        minDistance = min(minDistance, distance);
-        maxDistance = max(maxDistance, distance);
-    }
+    scalar minDistance = 0;
+    scalar maxDistance = 0;
+    planeDistanceRange(cellBB, minDistance, maxDistance);
 
     return
         minDistance <= tolerance_
@@ -447,63 +476,44 @@ finiteWallGeometry::cellStatus finiteWallGeometry::classifyContactCell
     const boundBox& cellBB
 ) const
 {
-    const pointField cellPoints = cellBB.points();
-    List<vector> localCellPoints(cellPoints.size());
+    const point center = cellBB.midpoint();
+    const vector halfSpan = 0.5*cellBB.span();
+    scalar minDistance = 0;
+    scalar maxDistance = 0;
+    planeDistanceRange(cellBB, minDistance, maxDistance);
 
-    bool anyPenetratingPoint = false;
-    bool allPenetratingPoints = true;
-
-    forAll(cellPoints, pointI)
-    {
-        const scalar distance = signedDistance(cellPoints[pointI]);
-
-        anyPenetratingPoint =
-            anyPenetratingPoint || distance >= -tolerance_;
-
-        allPenetratingPoints =
-            allPenetratingPoints && distance >= -tolerance_;
-
-        localCellPoints[pointI] = localCoordinates(cellPoints[pointI]);
-    }
-
-    if (!anyPenetratingPoint)
+    if (maxDistance < -tolerance_)
     {
         return cellOutside;
     }
 
+    const bool allPenetratingPoints =
+        minDistance >= -tolerance_;
+
     bool allSupportPoints = true;
 
-    forAll(localVertices_, edgeI)
+    forAll(globalEdgeNormals_, edgeI)
     {
-        const vector& edgeStart = localVertices_[edgeI];
-        const vector& edgeEnd =
-            localVertices_[(edgeI + 1) % localVertices_.size()];
+        const vector& edgeNormal = globalEdgeNormals_[edgeI];
+        const scalar centerValue =
+            (edgeNormal & (center - planePoint_))
+          + edgeOffsets_[edgeI];
 
-        bool anyPointInsideEdge = false;
-        bool allPointsInsideEdge = true;
-
-        forAll(localCellPoints, pointI)
-        {
-            const bool insideEdge =
-                edgeValue
-                (
-                    edgeStart,
-                    edgeEnd,
-                    localCellPoints[pointI]
-                ) >= -tolerance_;
-
-            anyPointInsideEdge = anyPointInsideEdge || insideEdge;
-            allPointsInsideEdge = allPointsInsideEdge && insideEdge;
-        }
+        const scalar radius =
+            mag(edgeNormal[0])*halfSpan[0]
+          + mag(edgeNormal[1])*halfSpan[1]
+          + mag(edgeNormal[2])*halfSpan[2];
 
         // The polygon prism and the AABB are both convex.  If every AABB
         // corner violates one polygon half-space, they cannot intersect.
-        if (!anyPointInsideEdge)
+        if (centerValue + radius < -tolerance_)
         {
             return cellOutside;
         }
 
-        allSupportPoints = allSupportPoints && allPointsInsideEdge;
+        allSupportPoints =
+            allSupportPoints
+         && centerValue - radius >= -tolerance_;
     }
 
     if (allPenetratingPoints && allSupportPoints)

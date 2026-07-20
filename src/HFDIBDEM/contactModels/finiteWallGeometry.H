@@ -34,16 +34,12 @@ class finiteWallGeometry
     vector tangent2_;
     pointField vertices_;
     List<vector> localVertices_;
+    List<vector> localEdgeNormals_;
+    List<vector> globalEdgeNormals_;
+    List<scalar> edgeOffsets_;
     boundBox patchBounds_;
     scalar tolerance_;
     label revision_;
-
-    scalar edgeValue
-    (
-        const vector& edgeStart,
-        const vector& edgeEnd,
-        const vector& checkedPoint
-    ) const;
 
     void createLegacyVertices();
     void initialiseLocalGeometry();
@@ -113,6 +109,13 @@ class finiteWallGeometry
     bool containsLocalPoint(const vector& localPoint) const;
 
     bool pointInContactRegion(const point& checkedPoint) const;
+
+    void planeDistanceRange
+    (
+        const boundBox& cellBB,
+        scalar& minDistance,
+        scalar& maxDistance
+    ) const;
 
     bool planeIntersectsCell(const boundBox& cellBB) const;
 

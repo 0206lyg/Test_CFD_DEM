@@ -307,6 +307,28 @@ bool isInsideInfinitePlaneWCInfo
     return ((p - p0) & nVec) < 0;
 }
 
+bool aabbPenetratesInfinitePlaneWCInfo
+(
+    const boundBox& bb,
+    const string& wallName
+)
+{
+    const vector& nVec = wallPlaneInfo::getWallPlaneInfo()[wallName][0];
+    const vector& p0 = wallPlaneInfo::getWallPlaneInfo()[wallName][1];
+    const point center = bb.midpoint();
+    const vector halfSpan = 0.5*bb.span();
+
+    // Exact maximum of the affine plane predicate over an AABB.  This is
+    // equivalent to testing all eight corners for signed distance >= 0.
+    const scalar maxSignedDistance =
+        ((center - p0) & nVec)
+      + mag(nVec[0])*halfSpan[0]
+      + mag(nVec[1])*halfSpan[1]
+      + mag(nVec[2])*halfSpan[2];
+
+    return maxSignedDistance >= 0;
+}
+
 bool isInsideWallDomainWCInfo
 (
     const point& p,
@@ -854,27 +876,9 @@ bool wallContactInfo::detectWallContact(
             {
                 // General polygon path: reject the half-space first so most
                 // particles do not enter polygon geometry predicates.
-                bool penetratesWallPlane = false;
-
-                forAll(bBpoints,bBP)
-                {
-                    if
-                    (
-                        !isInsideInfinitePlaneWCInfo
-                        (
-                            bBpoints[bBP],
-                            wallName
-                        )
-                    )
-                    {
-                        penetratesWallPlane = true;
-                        break;
-                    }
-                }
-
                 if
                 (
-                    !penetratesWallPlane
+                    !aabbPenetratesInfinitePlaneWCInfo(bodyBB, wallName)
                  || !generalFinitePatchBBOverlapsSupportWCInfo
                     (
                         bodyBB,
