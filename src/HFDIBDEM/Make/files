@@ -13,6 +13,7 @@ virtualMesh/virtualMesh.C
 virtualMesh/spectatorMesh.C
 virtualMesh/virtualMeshWall.C
 contactModels/materialInfo.C
+contactModels/finiteWallGeometry.C
 contactModels/wallContactVars.C
 contactModels/ibContactClass.C
 contactModels/prtContactInfo.C
