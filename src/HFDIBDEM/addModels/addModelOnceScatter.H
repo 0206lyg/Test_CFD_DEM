@@ -40,6 +40,7 @@ Contributors
 #define addModelOnceScatter_H
 
 #include "addModel.H"
+#include "polygonPrismGeometry.H"
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -106,6 +107,7 @@ class addModelOnceScatter
 	bool		firstTimeRunning_;
 	bool 		cellZoneActive_;
 	bool		boundBoxActive_;
+	bool		polygonPrismActive_;
 	Field<label>octreeField_;
 	bool		multiBody_;
 	bool		fieldBased_;
@@ -115,9 +117,18 @@ class addModelOnceScatter
     List<pointField>        cellZonePoints_;
     boundBox                cellZoneBounds_;
 
+    std::unique_ptr<polygonPrismGeometry> polygonPrismGeometry_;
+
     bool        allActiveCellsInMesh_;
 
     Random          randGen_;
+
+    scalar returnSynchronizedRandom01();
+
+    pointField relativeBodySupportPoints
+    (
+        scalar& isotropicRadius
+    );
 
     public:
 
@@ -159,6 +170,8 @@ class addModelOnceScatter
 	void updateCellZoneBoundBox();
 
     void initializeBoundBox();
+
+    void initializePolygonPrism();
 
 	labelList getBBoxCellsByOctTree
     (

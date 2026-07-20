@@ -95,12 +95,21 @@ reapeatedAddition_(false),
 firstTimeRunning_(true),
 cellZoneActive_(false),
 boundBoxActive_(false),
+polygonPrismActive_(false),
 octreeField_(mesh_.nCells(), 0),
 multiBody_(false),
 fieldBased_(false),
 fieldCurrentValue_(0),
+polygonPrismGeometry_(),
 allActiveCellsInMesh_(true),
-randGen_(clock::getTime())
+randGen_
+(
+    coeffsDict_.lookupOrDefault<label>
+    (
+        "randomSeed",
+        label(clock::getTime())
+    )
+)
 {
     if(!startTime0)
     {
@@ -161,6 +170,21 @@ void addModelOnceScatter::init()
         InfoH << addModel_Info << "-- addModelMessage-- "
             << "boundBox based addition zone" << endl;
 	}
+	else if (addDomain_ == "polygonPrism")
+	{
+        polygonPrismGeometry_.reset
+        (
+            new polygonPrismGeometry(addDomainCoeffs_)
+        );
+        polygonPrismActive_ = true;
+        initializePolygonPrism();
+        InfoH << addModel_Info << "-- addModelMessage-- "
+            << "convex polygonPrism based addition zone" << endl;
+        InfoH << "-- addModelMessage-- polygon area: "
+            << polygonPrismGeometry_->area()
+            << ", prism volume: " << polygonPrismGeometry_->volume()
+            << endl;
+	}
 	else if (addDomain_ == "domain")
 	{
 		InfoH << addModel_Info << "-- addModelMessage-- "
@@ -172,27 +196,72 @@ void addModelOnceScatter::init()
             << "notImplemented, will crash" << endl;
 	}
 
-    // check, if the whole zone is in the mesh
-    scalarList procZoneVols(Pstream::nProcs());
-    procZoneVols[Pstream::myProcNo()] = 0;
-    forAll (cellsInBoundBox_[Pstream::myProcNo()],cellI)
+    if (polygonPrismActive_)
     {
-        procZoneVols[Pstream::myProcNo()]+=mesh_.V()[cellsInBoundBox_[Pstream::myProcNo()][cellI]];
-    }
-    scalar zoneVol(gSum(procZoneVols));
-    scalar zoneBBoxVol(cellZoneBounds_.volume());
-    if (zoneVol - zoneBBoxVol > 1e-5*zoneBBoxVol)
-    {
-        allActiveCellsInMesh_ = false;
+        scalar localZoneVolume = 0;
+
+        forAll(cellsInBoundBox_[Pstream::myProcNo()], cellI)
+        {
+            localZoneVolume +=
+                mesh_.V()
+                [cellsInBoundBox_[Pstream::myProcNo()][cellI]];
+        }
+
+        scalar zoneVolume = localZoneVolume;
+        reduce(zoneVolume, sumOp<scalar>());
+        const scalar exactVolume = polygonPrismGeometry_->volume();
+        const scalar relativeVolumeError =
+            mag(zoneVolume - exactVolume)/(exactVolume + VSMALL);
+
+        allActiveCellsInMesh_ = relativeVolumeError <= 1e-5;
+
         InfoH << addModel_Info << "-- addModelMessage-- "
-             << "addition zone NOT completely immersed in mesh "
-             << "this computation will be EXPENSIVE" << endl;
-        InfoH << zoneVol << " " << zoneBBoxVol << endl;
+            << "polygonPrism selected-cell volume: " << zoneVolume
+            << ", exact volume: " << exactVolume
+            << ", relative difference: " << relativeVolumeError
+            << endl;
+
+        if (!allActiveCellsInMesh_)
+        {
+            InfoH << addModel_Info << "-- addModelMessage-- "
+                << "polygonPrism is not mesh-conformal at cell-center "
+                << "resolution; fieldBased volume fraction is approximate."
+                << endl;
+        }
     }
     else
     {
+        // Preserve the existing cellZone/boundBox diagnostic unchanged.
+        scalarList procZoneVols(Pstream::nProcs());
+        procZoneVols[Pstream::myProcNo()] = 0;
+        forAll (cellsInBoundBox_[Pstream::myProcNo()],cellI)
+        {
+            procZoneVols[Pstream::myProcNo()]
+                += mesh_.V()
+                [cellsInBoundBox_[Pstream::myProcNo()][cellI]];
+        }
+        scalar zoneVol(gSum(procZoneVols));
+        scalar zoneBBoxVol(cellZoneBounds_.volume());
+        if (zoneVol - zoneBBoxVol > 1e-5*zoneBBoxVol)
+        {
+            allActiveCellsInMesh_ = false;
+            InfoH << addModel_Info << "-- addModelMessage-- "
+                 << "addition zone NOT completely immersed in mesh "
+                 << "this computation will be EXPENSIVE" << endl;
+            InfoH << zoneVol << " " << zoneBBoxVol << endl;
+        }
+        else
+        {
+            InfoH << addModel_Info << "-- addModelMessage-- "
+                 << "addition zone completely immersed in mesh -> OK" << endl;
+        }
+    }
+
+    if (coeffsDict_.found("randomSeed"))
+    {
         InfoH << addModel_Info << "-- addModelMessage-- "
-             << "addition zone completely immersed in mesh -> OK" << endl;
+            << "using configured randomSeed "
+            << readLabel(coeffsDict_.lookup("randomSeed")) << endl;
     }
 
 	if (scalingMode_ == "noScaling")
@@ -339,22 +408,75 @@ std::shared_ptr<geomModel> addModelOnceScatter::addBody
 
     geomModel_->bodyScalePoints(1.02);
 
-    vector CoM(geomModel_->getCoM());
-    point bBoxCenter = cellZoneBounds_.midpoint();
-    geomModel_->bodyMovePoints(bBoxCenter - CoM);
+    bool validPosition = true;
 
-    vector randomTrans = geomModel_->addModelReturnRandomPosition(allActiveCellsInMesh_,cellZoneBounds_,randGen_);
-    geomModel_->bodyMovePoints(randomTrans);
+    if (polygonPrismActive_)
+    {
+        scalar isotropicRadius = 0;
+        const pointField relativeSupportPoints =
+            relativeBodySupportPoints(isotropicRadius);
+
+        scalarField unitRandomValues(4, 0);
+        forAll(unitRandomValues, randomI)
+        {
+            unitRandomValues[randomI] =
+                returnSynchronizedRandom01();
+        }
+
+        const point sampledCenter =
+            polygonPrismGeometry_->sampleCenter
+            (
+                relativeSupportPoints,
+                isotropicRadius,
+                unitRandomValues,
+                validPosition
+            );
+
+        if (validPosition)
+        {
+            geomModel_->bodyMovePoints
+            (
+                sampledCenter - geomModel_->getCoM()
+            );
+        }
+        else
+        {
+            InfoH << addModel_Info << "-- addModelMessage-- "
+                << "rotated/scaled body does not fit in polygonPrism"
+                << endl;
+        }
+    }
+    else
+    {
+        // Preserve the existing cellZone/boundBox placement behavior.
+        vector CoM(geomModel_->getCoM());
+        point bBoxCenter = cellZoneBounds_.midpoint();
+        geomModel_->bodyMovePoints(bBoxCenter - CoM);
+
+        vector randomTrans = geomModel_->addModelReturnRandomPosition
+        (
+            allActiveCellsInMesh_,
+            cellZoneBounds_,
+            randGen_
+        );
+        geomModel_->bodyMovePoints(randomTrans);
+    }
 
     // check if the body can be added
-    volScalarField helpBodyField_ = body;
-    geomModel_->createImmersedBody(
-        helpBodyField_,
-        octreeField_,
-        cellPoints_
-    );
+    bool canAddBodyI = false;
 
-    bool canAddBodyI = !isBodyInContact(immersedBodies);
+    if (validPosition)
+    {
+        volScalarField helpBodyField_ = body;
+        geomModel_->createImmersedBody
+        (
+            helpBodyField_,
+            octreeField_,
+            cellPoints_
+        );
+
+        canAddBodyI = !isBodyInContact(immersedBodies);
+    }
 
     geomModel_->bodyScalePoints(1.0/1.02);
 
@@ -464,6 +586,31 @@ void addModelOnceScatter::initializeBoundBox()
     cellZoneBounds_ = boundBox(minBound_,maxBound_);
 }
 //---------------------------------------------------------------------------//
+void addModelOnceScatter::initializePolygonPrism()
+{
+    octreeField_ *= 0;
+    cellsInBoundBox_[Pstream::myProcNo()].clear();
+
+    const pointField& cellCenters = mesh_.C();
+
+    forAll(cellCenters, cellI)
+    {
+        if (polygonPrismGeometry_->contains(cellCenters[cellI]))
+        {
+            cellsInBoundBox_[Pstream::myProcNo()].append(cellI);
+        }
+    }
+
+    cellZoneBounds_ = polygonPrismGeometry_->bounds();
+
+    label globalCellCount =
+        cellsInBoundBox_[Pstream::myProcNo()].size();
+    reduce(globalCellCount, sumOp<label>());
+
+    InfoH << addModel_Info << "-- addModelMessage-- "
+        << "polygonPrism selected cells: " << globalCellCount << endl;
+}
+//---------------------------------------------------------------------------//
 labelList addModelOnceScatter::getBBoxCellsByOctTree
 (
     label cellToCheck,
@@ -525,14 +672,20 @@ scalar addModelOnceScatter::checkLambdaFraction(const volScalarField& body)
 //---------------------------------------------------------------------------//
 scalar addModelOnceScatter::returnRandomAngle()
 {
-    scalar ranNum = 2.0*randGen_.scalar01() - 1.0;
+    const scalar unitRandom = polygonPrismActive_
+      ? returnSynchronizedRandom01()
+      : randGen_.scalar01();
+
+    scalar ranNum = 2.0*unitRandom - 1.0;
     scalar angle  = ranNum*Foam::constant::mathematical::pi;
 	return angle;
 }
 //---------------------------------------------------------------------------//
 scalar addModelOnceScatter::returnRandomScale()
 {
-	scalar ranNum       = randGen_.scalar01();
+	scalar ranNum = polygonPrismActive_
+      ? returnSynchronizedRandom01()
+      : randGen_.scalar01();
 	scalar scaleDiff    = maxScale_ - minScale_;
     scalar scaleFactor  = minScale_ + ranNum*scaleDiff;
 	InfoH << addModel_Info << "-- addModelMessage-- "
@@ -547,11 +700,61 @@ vector addModelOnceScatter::returnRandomRotationAxis()
 
 	for (int i=0;i<3;i++)
 	{
-		ranNum = randGen_.scalar01();
+		ranNum = polygonPrismActive_
+          ? returnSynchronizedRandom01()
+          : randGen_.scalar01();
 		axisOfRotation[i] = ranNum;
 	}
 
 	axisOfRotation /=mag(axisOfRotation);
 	return axisOfRotation;
+}
+//---------------------------------------------------------------------------//
+scalar addModelOnceScatter::returnSynchronizedRandom01()
+{
+    return randGen_.globalScalar01();
+}
+//---------------------------------------------------------------------------//
+pointField addModelOnceScatter::relativeBodySupportPoints
+(
+    scalar& isotropicRadius
+)
+{
+    isotropicRadius = 0;
+    const point bodyCenter = geomModel_->getCoM();
+
+    if (geomModel_->getcType() == sphere)
+    {
+        isotropicRadius = 0.5*geomModel_->getDC();
+        return pointField(1, vector::zero);
+    }
+
+    pointField bodyPoints = geomModel_->getBodyPoints();
+
+    if (bodyPoints.size() == 0)
+    {
+        // Conservative fallback for geometry types that do not expose their
+        // surface points (for example a compound body implementation).
+        const boundBox bodyBounds = geomModel_->getBounds();
+        const point& minimum = bodyBounds.min();
+        const point& maximum = bodyBounds.max();
+
+        bodyPoints.setSize(8);
+        bodyPoints[0] = point(minimum.x(), minimum.y(), minimum.z());
+        bodyPoints[1] = point(maximum.x(), minimum.y(), minimum.z());
+        bodyPoints[2] = point(minimum.x(), maximum.y(), minimum.z());
+        bodyPoints[3] = point(maximum.x(), maximum.y(), minimum.z());
+        bodyPoints[4] = point(minimum.x(), minimum.y(), maximum.z());
+        bodyPoints[5] = point(maximum.x(), minimum.y(), maximum.z());
+        bodyPoints[6] = point(minimum.x(), maximum.y(), maximum.z());
+        bodyPoints[7] = point(maximum.x(), maximum.y(), maximum.z());
+    }
+
+    forAll(bodyPoints, pointI)
+    {
+        bodyPoints[pointI] -= bodyCenter;
+    }
+
+    return bodyPoints;
 }
 //---------------------------------------------------------------------------//
