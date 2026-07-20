@@ -348,7 +348,11 @@ void getWallContactVars_ArbShape(
     const bool finiteSinglePatch =
         singleFiniteWallPatchContact(contactPatches, finiteWallName);
 
-    const label finiteNormalDirection = finiteSinglePatch
+    const bool legacyAxisAlignedFinitePatch =
+        finiteSinglePatch
+     && wallPlaneInfo::usesLegacyAxisAlignedFinitePath(finiteWallName);
+
+    const label finiteNormalDirection = legacyAxisAlignedFinitePatch
       ? wallNormalDirectionContact(finiteWallName)
       : -1;
 
@@ -416,11 +420,12 @@ void getWallContactVars_ArbShape(
                 wallCntInfo.getcClass().getGeomModel()
             ));
 
-            if (finiteSinglePatch)
+            if (legacyAxisAlignedFinitePatch)
             {
-                // The fitted finite plane VM is a complete one-cell-thick
-                // slab.  Integrate it directly instead of applying the
-                // infinite-wall starting-point discovery stage.
+                // Restore the complete Git-main axis-aligned finite-wall
+                // area path: the plane VM is a fitted one-cell-thick slab,
+                // so its occupied volume divided by the normal thickness is
+                // the contact area.
                 const scalar planeContactVolume =
                     virtMeshPlane->evaluateContact();
 
@@ -430,6 +435,17 @@ void getWallContactVars_ArbShape(
 
                 const scalar contactAreaLoc =
                     planeContactVolume/(normalCellSize + VSMALL);
+
+                contactAreas().append(contactAreaLoc);
+                contactPlaneCenters().append
+                (
+                    virtMeshPlane->getContactCenter()
+                );
+            }
+            else if (finiteSinglePatch)
+            {
+                const scalar contactAreaLoc =
+                    virtMeshPlane->evaluateContactArea();
 
                 contactAreas().append(contactAreaLoc);
                 contactPlaneCenters().append(virtMeshPlane->getContactCenter());

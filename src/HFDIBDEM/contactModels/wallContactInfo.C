@@ -34,6 +34,7 @@ Contributors
 #include "interAdhesion.H"
 #include "wallMatInfo.H"
 #include "wallPlaneInfo.H"
+#include "finiteWallGeometry.H"
 
 #include "virtualMeshLevel.H"
 #include "contactModelInfo.H"
@@ -93,44 +94,6 @@ label wallNormalDirectionWCInfo(const string& wallName)
     return 2;
 }
 
-bool finiteWallNormalAxisAlignedWCInfo(const string& wallName)
-{
-    if (!finiteWallPatchActiveWCInfo(wallName))
-    {
-        return false;
-    }
-
-    const vector& nVec = wallPlaneInfo::getWallPlaneInfo()[wallName][0];
-    const label nDir = wallNormalDirectionWCInfo(wallName);
-
-    if (mag(nVec[nDir]) <= VSMALL)
-    {
-        return false;
-    }
-
-    for (label dir = 0; dir < 3; dir++)
-    {
-        if (dir != nDir && mag(nVec[dir]) > SMALL)
-        {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-scalar finiteWallPatchPadWCInfo(const string& wallName)
-{
-    scalar pad = 0.0;
-
-    if (wallPlaneInfo::getWallPadInfo().found(wallName))
-    {
-        pad = wallPlaneInfo::getWallPadInfo()[wallName];
-    }
-
-    return pad;
-}
-
 boundBox emptyFinitePatchBoxWCInfo()
 {
     return boundBox(vector::zero, vector::zero);
@@ -162,23 +125,14 @@ boundBox spectatorCellBBWCInfo
     return boundBox(cellMin, cellMax);
 }
 
-bool finitePatchBBOverlapsSupportWCInfo
+bool legacyFinitePatchBBOverlapsSupportWCInfo
 (
     const boundBox& bb,
     const string& wallName
 )
 {
-    if (!finiteWallPatchActiveWCInfo(wallName))
-    {
-        return true;
-    }
-
     const vector& minBound = wallPlaneInfo::getWallMinBoundInfo()[wallName];
     const vector& maxBound = wallPlaneInfo::getWallMaxBoundInfo()[wallName];
-
-    // pad is a broad-phase tolerance only.  Exact contact boxes are clipped
-    // to the physical minBound/maxBound below.
-    const scalar pad = finiteWallPatchPadWCInfo(wallName);
     const label nDir = wallNormalDirectionWCInfo(wallName);
 
     for (label dir = 0; dir < 3; dir++)
@@ -189,10 +143,10 @@ bool finitePatchBBOverlapsSupportWCInfo
         }
 
         const scalar lo =
-            minScalarWCInfo(minBound[dir], maxBound[dir]) - pad;
+            minScalarWCInfo(minBound[dir], maxBound[dir]);
 
         const scalar hi =
-            maxScalarWCInfo(minBound[dir], maxBound[dir]) + pad;
+            maxScalarWCInfo(minBound[dir], maxBound[dir]);
 
         const scalar ovMin = maxScalarWCInfo(bb.min()[dir], lo);
         const scalar ovMax = minScalarWCInfo(bb.max()[dir], hi);
@@ -206,7 +160,7 @@ bool finitePatchBBOverlapsSupportWCInfo
     return true;
 }
 
-bool finitePatchTangentialSpanValidWCInfo
+bool generalFinitePatchBBOverlapsSupportWCInfo
 (
     const boundBox& bb,
     const string& wallName
@@ -217,6 +171,18 @@ bool finitePatchTangentialSpanValidWCInfo
         return true;
     }
 
+    const std::shared_ptr<const finiteWallGeometry> wallGeometry =
+        finiteWallGeometry::lookup(wallName);
+
+    return wallGeometry->cellMayIntersectContactRegion(bb);
+}
+
+bool legacyFinitePatchTangentialSpanValidWCInfo
+(
+    const boundBox& bb,
+    const string& wallName
+)
+{
     const label nDir = wallNormalDirectionWCInfo(wallName);
 
     for (label dir = 0; dir < 3; dir++)
@@ -235,25 +201,19 @@ bool finitePatchTangentialSpanValidWCInfo
     return true;
 }
 
-boundBox clipBBToFinitePatchSupportWCInfo
+boundBox legacyClipBBToFinitePatchSupportWCInfo
 (
     const boundBox& bb,
     const string& wallName
 )
 {
-    if (!finiteWallPatchActiveWCInfo(wallName))
-    {
-        return bb;
-    }
-
-    if (!finitePatchBBOverlapsSupportWCInfo(bb, wallName))
+    if (!legacyFinitePatchBBOverlapsSupportWCInfo(bb, wallName))
     {
         return emptyFinitePatchBoxWCInfo();
     }
 
     const vector& minBound = wallPlaneInfo::getWallMinBoundInfo()[wallName];
     const vector& maxBound = wallPlaneInfo::getWallMaxBoundInfo()[wallName];
-
     const label nDir = wallNormalDirectionWCInfo(wallName);
 
     vector newMin = bb.min();
@@ -284,8 +244,7 @@ boundBox clipBBToFinitePatchSupportWCInfo
     return boundBox(newMin, newMax);
 }
 
-
-point projectPointToWallPlaneWCInfo
+point legacyProjectPointToWallPlaneWCInfo
 (
     const point& p,
     const string& wallName
@@ -293,7 +252,6 @@ point projectPointToWallPlaneWCInfo
 {
     const vector& nVec = wallPlaneInfo::getWallPlaneInfo()[wallName][0];
     const vector& p0 = wallPlaneInfo::getWallPlaneInfo()[wallName][1];
-
     const scalar denom = magSqr(nVec);
 
     if (denom <= VSMALL)
@@ -304,22 +262,15 @@ point projectPointToWallPlaneWCInfo
     return p + ((nVec & (p0 - p))/denom)*nVec;
 }
 
-bool finitePatchPointInsideSupportWCInfo
+bool legacyFinitePatchPointInsideSupportWCInfo
 (
     const point& p,
     const string& wallName
 )
 {
-    if (!finiteWallPatchActiveWCInfo(wallName))
-    {
-        return true;
-    }
-
-    const point pp = projectPointToWallPlaneWCInfo(p, wallName);
-
+    const point pp = legacyProjectPointToWallPlaneWCInfo(p, wallName);
     const vector& minBound = wallPlaneInfo::getWallMinBoundInfo()[wallName];
     const vector& maxBound = wallPlaneInfo::getWallMaxBoundInfo()[wallName];
-
     const label nDir = wallNormalDirectionWCInfo(wallName);
 
     for (label dir = 0; dir < 3; dir++)
@@ -377,10 +328,42 @@ bool isInsideWallDomainWCInfo
         return true;
     }
 
-    return !finitePatchPointInsideSupportWCInfo(p, wallName);
+    if (wallPlaneInfo::usesLegacyAxisAlignedFinitePath(wallName))
+    {
+        return !legacyFinitePatchPointInsideSupportWCInfo(p, wallName);
+    }
+
+    const std::shared_ptr<const finiteWallGeometry> wallGeometry =
+        finiteWallGeometry::lookup(wallName);
+
+    return !wallGeometry->containsProjection(p);
 }
 
-boundBox clipBBToWallPenetrationWCInfo
+bool finiteContactBBValidWCInfo
+(
+    const boundBox& bb
+)
+{
+    if (bb.volume() <= VSMALL)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+bool legacyFiniteContactBBValidWCInfo
+(
+    const boundBox& bb,
+    const string& wallName
+)
+{
+    return
+        bb.volume() > VSMALL
+     && legacyFinitePatchTangentialSpanValidWCInfo(bb, wallName);
+}
+
+boundBox legacyClipBBToWallPenetrationWCInfo
 (
     const boundBox& bb,
     const string& wallName
@@ -389,50 +372,29 @@ boundBox clipBBToWallPenetrationWCInfo
     pointField newBBPoints;
     const pointField bbPoints = bb.points();
 
-    forAll(bbPoints, pI)
+    forAll(bbPoints, pointI)
     {
-        if (isInsideInfinitePlaneWCInfo(bbPoints[pI], wallName))
+        if (isInsideInfinitePlaneWCInfo(bbPoints[pointI], wallName))
         {
             newBBPoints.append
             (
-                projectPointToWallPlaneWCInfo(bbPoints[pI], wallName)
+                legacyProjectPointToWallPlaneWCInfo
+                (
+                    bbPoints[pointI],
+                    wallName
+                )
             );
         }
         else
         {
-            newBBPoints.append(bbPoints[pI]);
+            newBBPoints.append(bbPoints[pointI]);
         }
-    }
-
-    if (newBBPoints.size() == 0)
-    {
-        return emptyFinitePatchBoxWCInfo();
     }
 
     return boundBox(newBBPoints, false);
 }
 
-bool finiteContactBBValidWCInfo
-(
-    const boundBox& bb,
-    const string& wallName
-)
-{
-    if (bb.volume() <= VSMALL)
-    {
-        return false;
-    }
-
-    if (!finitePatchTangentialSpanValidWCInfo(bb, wallName))
-    {
-        return false;
-    }
-
-    return true;
-}
-
-
-boundBox projectBBToWallPlaneWCInfo
+boundBox legacyProjectBBToWallPlaneWCInfo
 (
     const boundBox& bb,
     const string& wallName
@@ -441,41 +403,60 @@ boundBox projectBBToWallPlaneWCInfo
     pointField planePoints;
     const pointField bbPoints = bb.points();
 
-    forAll(bbPoints, pI)
+    forAll(bbPoints, pointI)
     {
-        planePoints.append(projectPointToWallPlaneWCInfo(bbPoints[pI], wallName));
-    }
-
-    if (planePoints.size() == 0)
-    {
-        return emptyFinitePatchBoxWCInfo();
+        planePoints.append
+        (
+            legacyProjectPointToWallPlaneWCInfo
+            (
+                bbPoints[pointI],
+                wallName
+            )
+        );
     }
 
     return boundBox(planePoints, false);
 }
 
-boundBox finiteContactBoxWCInfo
+boundBox legacyFiniteContactBoxWCInfo
 (
     const boundBox& smCellBB,
     const string& wallName
 )
 {
-    if (!finitePatchBBOverlapsSupportWCInfo(smCellBB, wallName))
+    if (!legacyFinitePatchBBOverlapsSupportWCInfo(smCellBB, wallName))
     {
         return emptyFinitePatchBoxWCInfo();
     }
 
     boundBox contactBB =
-        clipBBToWallPenetrationWCInfo(smCellBB, wallName);
+        legacyClipBBToWallPenetrationWCInfo(smCellBB, wallName);
 
-    contactBB = clipBBToFinitePatchSupportWCInfo(contactBB, wallName);
+    contactBB =
+        legacyClipBBToFinitePatchSupportWCInfo(contactBB, wallName);
 
-    if (!finiteContactBBValidWCInfo(contactBB, wallName))
+    if (!legacyFiniteContactBBValidWCInfo(contactBB, wallName))
     {
         return emptyFinitePatchBoxWCInfo();
     }
 
     return contactBB;
+}
+
+boundBox finiteContactBoxWCInfo
+(
+    const boundBox& smCellBB,
+    const finiteWallGeometry& wallGeometry
+)
+{
+    if (!wallGeometry.cellMayIntersectContactRegion(smCellBB))
+    {
+        return emptyFinitePatchBoxWCInfo();
+    }
+
+    // Keep a conservative Cartesian box.  The exact inclined half-space and
+    // polygon masks are applied in virtualMeshWall at fine-cell resolution.
+    return smCellBB;
 }
 
 bool finiteContactBoxMayContainParticleWCInfo
@@ -499,10 +480,105 @@ bool finiteContactBoxMayContainParticleWCInfo
     return candidateType != volumeType::outside;
 }
 
-List<DynamicList<vector>> finiteWallSMComponentsWCInfo
+List<DynamicList<vector>> legacyFiniteWallSMComponentsWCInfo
 (
     spectatorMesh& sMesh,
     const string& wallName,
+    ibContactClass& cClass
+)
+{
+    typedef HashSet<vector,Hash<vector>> vectorHashSetWCInfo;
+
+    DynamicList<vector> candidateCells;
+    vectorHashSetWCInfo candidateSet;
+
+    // This block intentionally mirrors Git main's axis-aligned finite-wall
+    // component scan and uses its already-clipped Cartesian contact boxes.
+    for (label i = 0; i < label(sMesh.matrixSize_[0]); i++)
+    {
+        for (label j = 0; j < label(sMesh.matrixSize_[1]); j++)
+        {
+            for (label k = 0; k < label(sMesh.matrixSize_[2]); k++)
+            {
+                vector cellIndex(i, j, k);
+                const boundBox contactBB = legacyFiniteContactBoxWCInfo
+                (
+                    spectatorCellBBWCInfo(sMesh, cellIndex),
+                    wallName
+                );
+
+                if
+                (
+                    contactBB.volume() > VSMALL
+                 && finiteContactBoxMayContainParticleWCInfo
+                    (
+                        contactBB,
+                        cClass
+                    )
+                )
+                {
+                    candidateCells.append(cellIndex);
+                    candidateSet.insert(cellIndex);
+                }
+            }
+        }
+    }
+
+    List<DynamicList<vector>> components;
+    vectorHashSetWCInfo visited;
+
+    forAll(candidateCells, seedI)
+    {
+        const vector seed = candidateCells[seedI];
+
+        if (visited.found(seed))
+        {
+            continue;
+        }
+
+        DynamicList<vector> component;
+        DynamicList<vector> queue;
+        queue.append(seed);
+        visited.insert(seed);
+
+        label nextI = 0;
+        while (nextI < queue.size())
+        {
+            vector cellIndex = queue[nextI++];
+            component.append(cellIndex);
+
+            const List<vector> neighbours =
+                sMesh.faceNeighbourElements(cellIndex);
+
+            forAll(neighbours, neighbourI)
+            {
+                const vector& neighbour = neighbours[neighbourI];
+
+                if
+                (
+                    candidateSet.found(neighbour)
+                 && !visited.found(neighbour)
+                )
+                {
+                    visited.insert(neighbour);
+                    queue.append(neighbour);
+                }
+            }
+        }
+
+        if (component.size() > 0)
+        {
+            components.append(component);
+        }
+    }
+
+    return components;
+}
+
+List<DynamicList<vector>> finiteWallSMComponentsWCInfo
+(
+    spectatorMesh& sMesh,
+    const finiteWallGeometry& wallGeometry,
     ibContactClass& cClass
 )
 {
@@ -523,7 +599,7 @@ List<DynamicList<vector>> finiteWallSMComponentsWCInfo
                 const boundBox contactBB = finiteContactBoxWCInfo
                 (
                     spectatorCellBBWCInfo(sMesh, cellIndex),
-                    wallName
+                    wallGeometry
                 );
 
                 if
@@ -741,19 +817,76 @@ bool wallContactInfo::detectWallContact(
 
         if(finiteWallPatchActiveWCInfo(wallName))
         {
-            if(!finitePatchBBOverlapsSupportWCInfo(bodyBB, wallName))
+            if (wallPlaneInfo::usesLegacyAxisAlignedFinitePath(wallName))
             {
-                continue;
-            }
-
-            forAll(bBpoints,bBP)
-            {
-                if(!isInsideInfinitePlaneWCInfo(bBpoints[bBP], wallName))
+                // Restore Git main's complete fast broad phase: reject with
+                // the two tangential bounds before testing the wall plane.
+                if
+                (
+                    !legacyFinitePatchBBOverlapsSupportWCInfo
+                    (
+                        bodyBB,
+                        wallName
+                    )
+                )
                 {
-                    isPatchInContact = true;
-                    bBContact = true;
-                    break;
+                    continue;
                 }
+
+                forAll(bBpoints,bBP)
+                {
+                    if
+                    (
+                        !isInsideInfinitePlaneWCInfo
+                        (
+                            bBpoints[bBP],
+                            wallName
+                        )
+                    )
+                    {
+                        isPatchInContact = true;
+                        bBContact = true;
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                // General polygon path: reject the half-space first so most
+                // particles do not enter polygon geometry predicates.
+                bool penetratesWallPlane = false;
+
+                forAll(bBpoints,bBP)
+                {
+                    if
+                    (
+                        !isInsideInfinitePlaneWCInfo
+                        (
+                            bBpoints[bBP],
+                            wallName
+                        )
+                    )
+                    {
+                        penetratesWallPlane = true;
+                        break;
+                    }
+                }
+
+                if
+                (
+                    !penetratesWallPlane
+                 || !generalFinitePatchBBOverlapsSupportWCInfo
+                    (
+                        bodyBB,
+                        wallName
+                    )
+                )
+                {
+                    continue;
+                }
+
+                isPatchInContact = true;
+                bBContact = true;
             }
         }
         else
@@ -957,26 +1090,38 @@ void wallContactInfo::findContactAreas()
     forAll(finitePatches,fp)
     {
         string targetWall = finitePatches[fp];
+        const bool legacyAxisAlignedFinitePatch =
+            wallPlaneInfo::usesLegacyAxisAlignedFinitePath(targetWall);
 
-        if (!finiteWallNormalAxisAlignedWCInfo(targetWall))
+        std::shared_ptr<const finiteWallGeometry> wallGeometry;
+
+        if (!legacyAxisAlignedFinitePatch)
         {
-            FatalErrorInFunction
-                << "Finite wall patch '" << targetWall << "' has normal "
-                << wallPlaneInfo::getWallPlaneInfo()[targetWall][0] << nl
-                << "The finite support implementation requires an "
-                << "axis-aligned wall normal."
-                << exit(FatalError);
+            wallGeometry = finiteWallGeometry::lookup(targetWall);
         }
 
         constructSM();
 
-        List<DynamicList<vector>> possibleSMContact =
-            finiteWallSMComponentsWCInfo
+        List<DynamicList<vector>> possibleSMContact;
+
+        if (legacyAxisAlignedFinitePatch)
+        {
+            possibleSMContact = legacyFiniteWallSMComponentsWCInfo
             (
                 SM_(),
                 targetWall,
                 ibContactClass_
             );
+        }
+        else
+        {
+            possibleSMContact = finiteWallSMComponentsWCInfo
+            (
+                SM_(),
+                *wallGeometry,
+                ibContactClass_
+            );
+        }
 
         forAll(possibleSMContact,SC)
         {
@@ -989,17 +1134,30 @@ void wallContactInfo::findContactAreas()
             boundBox cBbox;
             forAll(possibleSMContact[SC],item)
             {
-                const boundBox contactBB = finiteContactBoxWCInfo
-                (
+                const boundBox spectatorCellBB =
                     spectatorCellBBWCInfo
                     (
                         SM_(),
                         possibleSMContact[SC][item]
-                    ),
-                    targetWall
-                );
+                    );
 
-                if (!finiteContactBBValidWCInfo(contactBB, targetWall))
+                const boundBox contactBB = legacyAxisAlignedFinitePatch
+                  ? legacyFiniteContactBoxWCInfo
+                    (
+                        spectatorCellBB,
+                        targetWall
+                    )
+                  : finiteContactBoxWCInfo
+                    (
+                        spectatorCellBB,
+                        *wallGeometry
+                    );
+
+                const bool validContactBB = legacyAxisAlignedFinitePatch
+                  ? legacyFiniteContactBBValidWCInfo(contactBB, targetWall)
+                  : finiteContactBBValidWCInfo(contactBB);
+
+                if (!validContactBB)
                 {
                     continue;
                 }
@@ -1025,20 +1183,37 @@ void wallContactInfo::findContactAreas()
 
             cBbox = boundBox(overallContactPoints,false);
 
-            // Contact area is represented once per connected coarse component
-            // and target wall.  wallContact.C evaluates this plane slab with
-            // the fitted finite VM and converts its volume to area using the
-            // actual normal cell thickness.
-            boundBox planeBox =
-                projectBBToWallPlaneWCInfo(cBbox, targetWall);
+            boundBox planeBox(cBbox);
 
-            planeBox =
-                clipBBToFinitePatchSupportWCInfo(planeBox, targetWall);
-
-            if (!finitePatchTangentialSpanValidWCInfo(planeBox, targetWall))
+            if (legacyAxisAlignedFinitePatch)
             {
-                continue;
+                // Restore Git main's projected, tangentially clipped,
+                // one-cell-thick plane VM used by the volume/thickness area
+                // expression in wallContact.C.
+                planeBox =
+                    legacyProjectBBToWallPlaneWCInfo(cBbox, targetWall);
+
+                planeBox =
+                    legacyClipBBToFinitePatchSupportWCInfo
+                    (
+                        planeBox,
+                        targetWall
+                    );
+
+                if
+                (
+                    !legacyFinitePatchTangentialSpanValidWCInfo
+                    (
+                        planeBox,
+                        targetWall
+                    )
+                )
+                {
+                    continue;
+                }
             }
+            // General polygons keep the conservative 3-D component box.  Its
+            // exact inclined plane/polygon intersection is evaluated later.
 
             Tuple2<point,boundBox> sMPlane;
             sMPlane.first() = planeBox.midpoint();

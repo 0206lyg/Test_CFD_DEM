@@ -114,11 +114,6 @@ void clipBBToFinitePatchSupportWSCI
     const string& wallName
 )
 {
-    if (!finiteWallPatchActiveWSCI(wallName))
-    {
-        return;
-    }
-
     const vector& minBound =
         wallPlaneInfo::getWallMinBoundInfo()[wallName];
 
@@ -151,11 +146,6 @@ bool finitePatchTangentialSpanValidWSCI
     const string& wallName
 )
 {
-    if (!finiteWallPatchActiveWSCI(wallName))
-    {
-        return true;
-    }
-
     const label nDir = wallNormalDirectionWSCI(wallName);
 
     for (label dir = 0; dir < 3; dir++)
@@ -184,10 +174,9 @@ scalar componentProductWSCI(const vector& nVec)
     );
 }
 
-vector finiteSubVolumeNVectorWSCI
+vector generalFiniteSubVolumeNVectorWSCI
 (
     const boundBox& bb,
-    const string& wallName,
     const bool allowNormalPadding,
     boundBox& correctedBB,
     bool& valid
@@ -202,8 +191,6 @@ vector finiteSubVolumeNVectorWSCI
 
     vector subVolumeNVector(vector::zero);
 
-    const label nDir = wallNormalDirectionWSCI(wallName);
-
     for (label dir = 0; dir < 3; dir++)
     {
         const scalar spanI =
@@ -211,7 +198,7 @@ vector finiteSubVolumeNVectorWSCI
 
         if (spanI <= VSMALL)
         {
-            if (allowNormalPadding && dir == nDir)
+            if (allowNormalPadding)
             {
                 subVolumeNVector[dir] = 1;
 
@@ -234,6 +221,61 @@ vector finiteSubVolumeNVectorWSCI
                     scalar(1),
                     ceil(nRaw - SMALL)
                 );
+        }
+    }
+
+    if (correctedBB.volume() <= VSMALL)
+    {
+        valid = false;
+    }
+
+    return subVolumeNVector;
+}
+
+vector legacyFiniteSubVolumeNVectorWSCI
+(
+    const boundBox& bb,
+    const string& wallName,
+    const bool allowNormalPadding,
+    boundBox& correctedBB,
+    bool& valid
+)
+{
+    correctedBB = bb;
+    valid = true;
+
+    const scalar h = virtualMeshLevel::getCharCellSize();
+    const scalar level = virtualMeshLevel::getLevelOfDivision();
+    const scalar subH = h/level;
+
+    vector subVolumeNVector(vector::zero);
+    const label nDir = wallNormalDirectionWSCI(wallName);
+
+    for (label dir = 0; dir < 3; dir++)
+    {
+        const scalar spanI =
+            correctedBB.max()[dir] - correctedBB.min()[dir];
+
+        if (spanI <= VSMALL)
+        {
+            if (allowNormalPadding && dir == nDir)
+            {
+                subVolumeNVector[dir] = 1;
+                correctedBB.min()[dir] -= subH*0.5;
+                correctedBB.max()[dir] += subH*0.5;
+            }
+            else
+            {
+                valid = false;
+                subVolumeNVector[dir] = 0;
+            }
+        }
+        else
+        {
+            const scalar nRaw = spanI/subH;
+
+            subVolumeNVector[dir] =
+                maxScalarWSCI(scalar(1), ceil(nRaw - SMALL));
         }
     }
 
@@ -277,6 +319,10 @@ bodyId_(bodyId)
     const bool finiteSinglePatch =
         singleFiniteWallPatchWSCI(contactPatches, finiteWallName);
 
+    const bool legacyAxisAlignedFinitePatch =
+        finiteSinglePatch
+     && wallPlaneInfo::usesLegacyAxisAlignedFinitePath(finiteWallName);
+
     const scalar h = virtualMeshLevel::getCharCellSize();
     const scalar level = virtualMeshLevel::getLevelOfDivision();
     const scalar subH = h/level;
@@ -288,24 +334,42 @@ bodyId_(bodyId)
 
         if (finiteSinglePatch)
         {
-            clipBBToFinitePatchSupportWSCI
-            (
-                contactBBData[cBD].second(),
-                finiteWallName
-            );
+            if (legacyAxisAlignedFinitePatch)
+            {
+                // Preserve the complete Git-main fast-path preprocessing.
+                clipBBToFinitePatchSupportWSCI
+                (
+                    contactBBData[cBD].second(),
+                    finiteWallName
+                );
+            }
 
             bool validFiniteBB = true;
             boundBox correctedBB;
 
-            subVolumeNVector =
-                finiteSubVolumeNVectorWSCI
+            if (legacyAxisAlignedFinitePatch)
+            {
+                subVolumeNVector =
+                    legacyFiniteSubVolumeNVectorWSCI
+                    (
+                        contactBBData[cBD].second(),
+                        finiteWallName,
+                        false,
+                        correctedBB,
+                        validFiniteBB
+                    );
+            }
+            else
+            {
+                subVolumeNVector =
+                    generalFiniteSubVolumeNVectorWSCI
                 (
                     contactBBData[cBD].second(),
-                    finiteWallName,
                     false,
                     correctedBB,
                     validFiniteBB
                 );
+            }
 
             if (!validFiniteBB)
             {
@@ -350,7 +414,8 @@ bodyId_(bodyId)
                 subVolumeNVector,
                 h,
                 subVolumeV,
-                finiteSinglePatch
+                finiteSinglePatch,
+                finiteSinglePatch ? finiteWallName : string("")
             )  
         );
         vmWInfoList_.append(vmWInfo);
@@ -363,24 +428,43 @@ bodyId_(bodyId)
 
         if (finiteSinglePatch)
         {
-            clipBBToFinitePatchSupportWSCI
-            (
-                planeBBData[pBD].second(),
-                finiteWallName
-            );
+            if (legacyAxisAlignedFinitePatch)
+            {
+                // The original plane box is clipped before one-cell normal
+                // padding and fitted-grid construction.
+                clipBBToFinitePatchSupportWSCI
+                (
+                    planeBBData[pBD].second(),
+                    finiteWallName
+                );
+            }
 
             bool validFinitePlaneBB = true;
             boundBox correctedPlaneBB;
 
-            subVolumeNVector =
-                finiteSubVolumeNVectorWSCI
+            if (legacyAxisAlignedFinitePatch)
+            {
+                subVolumeNVector =
+                    legacyFiniteSubVolumeNVectorWSCI
+                    (
+                        planeBBData[pBD].second(),
+                        finiteWallName,
+                        true,
+                        correctedPlaneBB,
+                        validFinitePlaneBB
+                    );
+            }
+            else
+            {
+                subVolumeNVector =
+                    generalFiniteSubVolumeNVectorWSCI
                 (
                     planeBBData[pBD].second(),
-                    finiteWallName,
                     true,
                     correctedPlaneBB,
                     validFinitePlaneBB
                 );
+            }
 
             if (!validFinitePlaneBB)
             {
@@ -420,7 +504,8 @@ bodyId_(bodyId)
                 subVolumeNVector,
                 h,
                 subVolumeV,
-                finiteSinglePatch
+                finiteSinglePatch,
+                finiteSinglePatch ? finiteWallName : string("")
             )
         );
         vmPlaneInfoList_.append(vmWInfo);
