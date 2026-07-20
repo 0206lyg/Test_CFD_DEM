@@ -1,0 +1,54 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  8                                     |
+|   \\  /    A nd           | Web:      www.OpenFOAM.org                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "constant";
+    object      dynamicMeshDict;
+}
+
+// ************************************************************************* //
+
+dynamicFvMesh   dynamicMotionSolverFvMesh;
+
+motionSolverLibs ("libfvMotionSolvers.so");
+
+solver          displacementLayeredMotion;
+
+displacementLayeredMotionCoeffs
+{
+    regions
+    {
+        largeReservoir
+        {
+            interpolationScheme linear;
+
+            boundaryField
+            {
+                reservoirBottom
+                {
+                    type    fixedValue;
+                    value   uniform (0 0 0);
+                }
+
+                reservoirTop
+                {
+                    type                timeVaryingUniformFixedValue;
+                    file                "$FOAM_CASE/constant/reservoirTopDisplacement.dat";
+                    outOfBounds         clamp;
+                    interpolationScheme linear;
+                }
+            }
+        }
+    }
+}
+
+// ************************************************************************* //

@@ -1,0 +1,138 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  8                                     |
+|   \\  /    A nd           | Web:      www.OpenFOAM.org                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "constant";
+    object      HFDIBDEMDict;
+}
+
+bodyNames ( "PH_SC_reservoir" );
+
+interpolationSchemes
+{
+    U cell;
+}
+
+surfaceThreshold    1e-4;
+// Fraction of the current CFD time step: deltaT_DEM = stepDEM*deltaT_CFD.
+stepDEM             0.01;
+geometricD          (1 1 1);
+recordSimulation    true;
+recordFirstTimeStep true;
+// Preserve the example-04 validation cap. fieldValue remains the target.
+nSolidsInDomain     2000;
+
+outputSetup
+{
+    basic       false;
+    iB          false;
+    DEM         false;
+    addModel    false;
+    parallelDEM false;
+}
+
+DEM
+{
+    LcCoeff 4.0;
+
+    materials
+    {
+        particle
+        {
+            Y       5e7;
+            nu      0.5;
+            mu      0.5;
+            adhN    0;
+            eps     0.5;
+        }
+
+        wall
+        {
+            Y       5e7;
+            nu      0.5;
+            mu      0.5;
+            adhN    0;
+            eps     0.5;
+        }
+    }
+
+    cyclicPatches
+    {
+    }
+
+    collisionPatches
+    {
+        // Generated together with blockMeshDict. Includes 12 small sides,
+        // 12 piston-limited large sides, 12 shoulders, and the moving piston.
+        // bottomOutlet intentionally has no DEM collision wall.
+        #include "dodecagonCollisionPatches"
+    }
+}
+
+virtualMesh
+{
+    level        4;
+    charCellSize 0.0005;
+}
+
+PH_SC_reservoir
+{
+    fullyCoupledBody
+    {
+        velocity (0 0 0);
+    }
+
+    rho         rho [1 -3 0 0 0 0 0] 1000;
+    refineMC    5;
+
+    U
+    {
+        BC noSlip;
+    }
+
+    bodyAddition
+    {
+        addModel onceScatter;
+        onceScatterCoeffs
+        {
+            addMode fieldBased;
+            fieldBasedCoeffs
+            {
+                fieldName  lambda;
+                fieldValue 0.3;
+            }
+
+            randomSeed 1207;
+            #include "dodecagonAdditionDomain"
+
+            scalingMode noScaling;
+            noScalingCoeffs
+            {
+            }
+
+            rotationMode randomRotation;
+            randomRotationCoeffs
+            {
+            }
+        }
+    }
+
+    material         particle;
+    bodyGeom         convex;
+    updateTorque     true;
+    sdBasedLambda    false;
+    interfaceSpan    1.0;
+    startSynced      false;
+    refineBuffers    0;
+    timesToSetStatic -1;
+}
+
+// ************************************************************************* //

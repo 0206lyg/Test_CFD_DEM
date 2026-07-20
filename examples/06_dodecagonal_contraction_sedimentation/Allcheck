@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+cd "${0%/*}" || exit 1
+
+./generate_dodecagon_geometry.py --check
+./validate_case.py
+./validate_contact_predicates.py
+./validate_polygon_prism_sampling.py
+
+if command -v blockMesh >/dev/null 2>&1 && command -v checkMesh >/dev/null 2>&1
+then
+    blockMesh
+    checkMesh -allGeometry -allTopology
+else
+    echo "OpenFOAM tools not found: skipped blockMesh/checkMesh."
+fi
