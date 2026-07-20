@@ -54,6 +54,9 @@
 >>> Possible values: ***materialName***
 >>> nVec: ***normal vector***
 >>> planePoint: *** point located on plane***
+>>> **finitePatch** - *optional* > Set to *true* for a bounded planar wall
+>>>> **vertices** > Three or more coplanar, ordered vertices of a convex polygon; use this form for inclined walls
+>>>> **minBound**, **maxBound** > Legacy alternative retained for axis-aligned rectangular walls only
 
 ***bodyName*** - *required* > Body name which correspond to value in **bodyNames**
 
