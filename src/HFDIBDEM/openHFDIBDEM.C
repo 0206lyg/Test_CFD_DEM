@@ -74,6 +74,29 @@ label dominantWallDirection(const vector& normal)
     return 2;
 }
 
+label axisAlignedWallDirection(const vector& normal)
+{
+    if (mag(normal) <= VSMALL)
+    {
+        return -1;
+    }
+
+    const vector normalHat(normal/mag(normal));
+    label normalDirection = -1;
+    label nonZeroDirections = 0;
+
+    for (label dir = 0; dir < 3; dir++)
+    {
+        if (mag(normalHat[dir]) > 1e-8)
+        {
+            normalDirection = dir;
+            nonZeroDirections++;
+        }
+    }
+
+    return nonZeroDirections == 1 ? normalDirection : -1;
+}
+
 }
 
 //---------------------------------------------------------------------------//
@@ -460,16 +483,120 @@ recordSimulation_(readBool(HFDIBDEMDict_.lookup("recordSimulation")))
                 << exit(FatalIOError);
         }
 
+        const vector& leaderNormal =
+            wallPlaneInfo::getWallPlaneInfo()[leaderWall][0];
+
+        const label supportDirection =
+            axisAlignedWallDirection(leaderNormal);
+
+        if (supportDirection < 0)
+        {
+            FatalIOErrorInFunction(HFDIBDEMDict_)
+                << "supportLimit leader wall " << leaderWall
+                << " must translate along one Cartesian axis. nVec is "
+                << leaderNormal << "."
+                << exit(FatalIOError);
+        }
+
         if
         (
             wallPlaneInfo::getWallPatchVerticesInfo().found(followerWall)
         )
         {
-            FatalIOErrorInFunction(HFDIBDEMDict_)
-                << "supportLimit is not defined for polygonal finite wall "
-                << followerWall << ".  It currently requires the legacy "
-                << "axis-aligned minBound/maxBound representation."
-                << exit(FatalIOError);
+            const vector followerNormal =
+                wallPlaneInfo::getWallPlaneInfo()[followerWall][0]
+               /mag(wallPlaneInfo::getWallPlaneInfo()[followerWall][0]);
+
+            const vector leaderNormalHat = leaderNormal/mag(leaderNormal);
+
+            if (mag(followerNormal & leaderNormalHat) > 1e-8)
+            {
+                FatalIOErrorInFunction(HFDIBDEMDict_)
+                    << "polygonal supportLimit follower " << followerWall
+                    << " surface must be parallel to the leader motion "
+                    << "direction. Follower nVec " << followerNormal
+                    << " is not perpendicular to leader nVec "
+                    << leaderNormalHat << "."
+                    << exit(FatalIOError);
+            }
+
+            const pointField& followerVertices =
+                wallPlaneInfo::getWallPatchVerticesInfo()[followerWall];
+
+            const vector& minBound =
+                wallPlaneInfo::getWallMinBoundInfo()[followerWall];
+
+            const vector& maxBound =
+                wallPlaneInfo::getWallMaxBoundInfo()[followerWall];
+
+            const scalar supportSpan =
+                maxBound[supportDirection] - minBound[supportDirection];
+
+            const scalar supportTolerance = max
+            (
+                scalar(1e-12),
+                scalar(1e-10)*max(mag(maxBound - minBound), scalar(1))
+            );
+
+            if (supportSpan <= supportTolerance)
+            {
+                FatalIOErrorInFunction(HFDIBDEMDict_)
+                    << "polygonal supportLimit follower " << followerWall
+                    << " has no extent along leader direction "
+                    << supportDirection << "."
+                    << exit(FatalIOError);
+            }
+
+            label minCapVertices = 0;
+            label maxCapVertices = 0;
+
+            forAll(followerVertices, vertexI)
+            {
+                const scalar coordinate =
+                    followerVertices[vertexI][supportDirection];
+
+                if
+                (
+                    mag(coordinate - minBound[supportDirection])
+                 <= supportTolerance
+                )
+                {
+                    minCapVertices++;
+                }
+                else if
+                (
+                    mag(coordinate - maxBound[supportDirection])
+                 <= supportTolerance
+                )
+                {
+                    maxCapVertices++;
+                }
+                else
+                {
+                    FatalIOErrorInFunction(HFDIBDEMDict_)
+                        << "polygonal supportLimit follower "
+                        << followerWall << " must be a two-cap extrusion "
+                        << "along direction " << supportDirection << ". "
+                        << "Vertex " << followerVertices[vertexI]
+                        << " lies on neither cap."
+                        << exit(FatalIOError);
+                }
+            }
+
+            if (minCapVertices < 2 || maxCapVertices < 2)
+            {
+                FatalIOErrorInFunction(HFDIBDEMDict_)
+                    << "polygonal supportLimit follower " << followerWall
+                    << " needs at least two vertices on each support cap. "
+                    << "Found " << minCapVertices << " and "
+                    << maxCapVertices << "."
+                    << exit(FatalIOError);
+            }
+
+            Info<< " -- polygonal collisionPatch " << followerWall
+                << " safely follows " << leaderWall
+                << " on its " << wallSupportBound_[followerWall]
+                << " support cap" << endl;
         }
     }
 
@@ -709,13 +836,45 @@ void openHFDIBDEM::setMovingWallsAtFraction(const scalar fraction)
         vector maxBound =
             wallPlaneInfo::getWallMaxBoundInfo()[followerWall];
 
+        const scalar supportTolerance = max
+        (
+            scalar(1e-12),
+            scalar(1e-10)*max(mag(maxBound - minBound), scalar(1))
+        );
+
         if (wallSupportBound_[followerWall] == "max")
         {
+            if
+            (
+                leaderPoint[leaderNormalDirection]
+             <= minBound[leaderNormalDirection] + supportTolerance
+            )
+            {
+                FatalErrorInFunction
+                    << "Moving support wall " << leaderWall
+                    << " crossed the fixed cap of follower "
+                    << followerWall << "."
+                    << exit(FatalError);
+            }
+
             maxBound[leaderNormalDirection] =
                 leaderPoint[leaderNormalDirection];
         }
         else
         {
+            if
+            (
+                leaderPoint[leaderNormalDirection]
+             >= maxBound[leaderNormalDirection] - supportTolerance
+            )
+            {
+                FatalErrorInFunction
+                    << "Moving support wall " << leaderWall
+                    << " crossed the fixed cap of follower "
+                    << followerWall << "."
+                    << exit(FatalError);
+            }
+
             minBound[leaderNormalDirection] =
                 leaderPoint[leaderNormalDirection];
         }
