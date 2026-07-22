@@ -33,10 +33,13 @@ Contributors
 
 #include "virtualMeshLevel.H"
 #include "wallPlaneInfo.H"
+#include "stlBased.H"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <map>
+#include <utility>
 #include <vector>
 
 using namespace Foam;
@@ -45,6 +48,8 @@ namespace
 {
 
 typedef std::vector<vector> localPolygonVMW;
+typedef std::vector<point> polygon3DVMW;
+typedef std::vector<polygon3DVMW> convexPolyhedronVMW;
 
 pointField createJointQuadratureVMW()
 {
@@ -389,6 +394,453 @@ scalar polygonAreaAndCenterVMW
     return 0.5*mag(twiceArea);
 }
 
+void cleanPolygon3DVMW
+(
+    polygon3DVMW& polygon,
+    const scalar tolerance
+)
+{
+    polygon3DVMW cleanedPolygon;
+    cleanedPolygon.reserve(polygon.size());
+
+    for (polygon3DVMW::const_iterator iter = polygon.begin();
+         iter != polygon.end(); ++iter)
+    {
+        if
+        (
+            cleanedPolygon.empty()
+         || mag(*iter - cleanedPolygon.back()) > tolerance
+        )
+        {
+            cleanedPolygon.push_back(*iter);
+        }
+    }
+
+    if
+    (
+        cleanedPolygon.size() > 1
+     && mag(cleanedPolygon.front() - cleanedPolygon.back()) <= tolerance
+    )
+    {
+        cleanedPolygon.pop_back();
+    }
+
+    if (cleanedPolygon.size() < 3)
+    {
+        polygon.clear();
+        return;
+    }
+
+    vector twiceArea(vector::zero);
+    const point& origin = cleanedPolygon.front();
+
+    for (label pointI = 1; pointI + 1 < label(cleanedPolygon.size()); pointI++)
+    {
+        twiceArea +=
+            (cleanedPolygon[pointI] - origin)
+          ^ (cleanedPolygon[pointI + 1] - origin);
+    }
+
+    if (mag(twiceArea) <= sqr(tolerance))
+    {
+        polygon.clear();
+        return;
+    }
+
+    polygon.swap(cleanedPolygon);
+}
+
+struct planeAngleLessVMW
+{
+    point center_;
+    vector tangent1_;
+    vector tangent2_;
+
+    planeAngleLessVMW
+    (
+        const point& center,
+        const vector& tangent1,
+        const vector& tangent2
+    )
+    :
+    center_(center),
+    tangent1_(tangent1),
+    tangent2_(tangent2)
+    {}
+
+    bool operator()(const point& a, const point& b) const
+    {
+        const vector relativeA = a - center_;
+        const vector relativeB = b - center_;
+
+        return
+            std::atan2(relativeA & tangent2_, relativeA & tangent1_)
+          < std::atan2(relativeB & tangent2_, relativeB & tangent1_);
+    }
+};
+
+convexPolyhedronVMW cellPolyhedronVMW(const boundBox& cellBB)
+{
+    const scalar x0 = cellBB.min()[0];
+    const scalar y0 = cellBB.min()[1];
+    const scalar z0 = cellBB.min()[2];
+    const scalar x1 = cellBB.max()[0];
+    const scalar y1 = cellBB.max()[1];
+    const scalar z1 = cellBB.max()[2];
+
+    const point p000(x0, y0, z0);
+    const point p001(x0, y0, z1);
+    const point p010(x0, y1, z0);
+    const point p011(x0, y1, z1);
+    const point p100(x1, y0, z0);
+    const point p101(x1, y0, z1);
+    const point p110(x1, y1, z0);
+    const point p111(x1, y1, z1);
+
+    convexPolyhedronVMW polyhedron;
+    polyhedron.reserve(6);
+    polyhedron.push_back(polygon3DVMW{p000, p001, p011, p010});
+    polyhedron.push_back(polygon3DVMW{p100, p110, p111, p101});
+    polyhedron.push_back(polygon3DVMW{p000, p100, p101, p001});
+    polyhedron.push_back(polygon3DVMW{p010, p011, p111, p110});
+    polyhedron.push_back(polygon3DVMW{p000, p010, p110, p100});
+    polyhedron.push_back(polygon3DVMW{p001, p101, p111, p011});
+
+    return polyhedron;
+}
+
+bool clipPolyhedronVMW
+(
+    convexPolyhedronVMW& polyhedron,
+    const vector& inwardNormal,
+    const scalar offset,
+    const scalar tolerance
+)
+{
+    convexPolyhedronVMW clippedPolyhedron;
+    clippedPolyhedron.reserve(polyhedron.size() + 1);
+    std::vector<point> capPoints;
+
+    for (convexPolyhedronVMW::const_iterator faceIter = polyhedron.begin();
+         faceIter != polyhedron.end(); ++faceIter)
+    {
+        if (faceIter->empty())
+        {
+            continue;
+        }
+
+        polygon3DVMW clippedFace;
+        clippedFace.reserve(faceIter->size() + 1);
+
+        point previous = faceIter->back();
+        scalar previousValue = (inwardNormal & previous) + offset;
+        bool previousInside = previousValue >= -tolerance;
+
+        for (polygon3DVMW::const_iterator pointIter = faceIter->begin();
+             pointIter != faceIter->end(); ++pointIter)
+        {
+            const point current = *pointIter;
+            const scalar currentValue = (inwardNormal & current) + offset;
+            const bool currentInside = currentValue >= -tolerance;
+
+            if (currentInside != previousInside)
+            {
+                const scalar denominator = previousValue - currentValue;
+
+                if (mag(denominator) > VSMALL)
+                {
+                    scalar fraction = previousValue/denominator;
+                    fraction = max(scalar(0), min(scalar(1), fraction));
+                    const point intersection =
+                        previous + fraction*(current - previous);
+
+                    clippedFace.push_back(intersection);
+                    appendUniquePointVMW
+                    (
+                        capPoints,
+                        intersection,
+                        tolerance
+                    );
+                }
+            }
+
+            if (currentInside)
+            {
+                clippedFace.push_back(current);
+            }
+
+            previous = current;
+            previousValue = currentValue;
+            previousInside = currentInside;
+        }
+
+        cleanPolygon3DVMW(clippedFace, tolerance);
+
+        if (!clippedFace.empty())
+        {
+            clippedPolyhedron.push_back(clippedFace);
+        }
+    }
+
+    if (clippedPolyhedron.empty())
+    {
+        polyhedron.clear();
+        return false;
+    }
+
+    if (capPoints.size() >= 3)
+    {
+        point capCenter(vector::zero);
+
+        for (std::vector<point>::const_iterator iter = capPoints.begin();
+             iter != capPoints.end(); ++iter)
+        {
+            capCenter += *iter;
+        }
+
+        capCenter /= scalar(capPoints.size());
+
+        vector referenceDirection(1, 0, 0);
+
+        if (mag(inwardNormal[0]) > 0.8)
+        {
+            referenceDirection = vector(0, 1, 0);
+        }
+
+        vector tangent1 = inwardNormal ^ referenceDirection;
+
+        if (mag(tangent1) <= VSMALL)
+        {
+            referenceDirection = vector(0, 0, 1);
+            tangent1 = inwardNormal ^ referenceDirection;
+        }
+
+        tangent1 /= mag(tangent1);
+        vector tangent2 = inwardNormal ^ tangent1;
+        tangent2 /= mag(tangent2);
+
+        std::sort
+        (
+            capPoints.begin(),
+            capPoints.end(),
+            planeAngleLessVMW(capCenter, tangent1, tangent2)
+        );
+
+        polygon3DVMW capPolygon(capPoints.begin(), capPoints.end());
+        cleanPolygon3DVMW(capPolygon, tolerance);
+
+        if (!capPolygon.empty())
+        {
+            clippedPolyhedron.push_back(capPolygon);
+        }
+    }
+
+    polyhedron.swap(clippedPolyhedron);
+    return true;
+}
+
+scalar polyhedronVolumeAndCenterVMW
+(
+    const convexPolyhedronVMW& polyhedron,
+    point& center
+)
+{
+    center = vector::zero;
+    point interiorPoint(vector::zero);
+    label pointCount = 0;
+
+    for (convexPolyhedronVMW::const_iterator faceIter = polyhedron.begin();
+         faceIter != polyhedron.end(); ++faceIter)
+    {
+        for (polygon3DVMW::const_iterator pointIter = faceIter->begin();
+             pointIter != faceIter->end(); ++pointIter)
+        {
+            interiorPoint += *pointIter;
+            pointCount++;
+        }
+    }
+
+    if (pointCount == 0)
+    {
+        return 0;
+    }
+
+    interiorPoint /= scalar(pointCount);
+    scalar volume = 0;
+
+    for (convexPolyhedronVMW::const_iterator faceIter = polyhedron.begin();
+         faceIter != polyhedron.end(); ++faceIter)
+    {
+        if (faceIter->size() < 3)
+        {
+            continue;
+        }
+
+        const point& a = faceIter->front();
+
+        for (label pointI = 1; pointI + 1 < label(faceIter->size()); pointI++)
+        {
+            const point& b = (*faceIter)[pointI];
+            const point& c = (*faceIter)[pointI + 1];
+            const scalar tetrahedronVolume = mag
+            (
+                (a - interiorPoint)
+              & ((b - interiorPoint) ^ (c - interiorPoint))
+            )/6.0;
+
+            if (tetrahedronVolume <= VSMALL)
+            {
+                continue;
+            }
+
+            volume += tetrahedronVolume;
+            center +=
+                0.25*(interiorPoint + a + b + c)*tetrahedronVolume;
+        }
+    }
+
+    if (volume > VSMALL)
+    {
+        center /= volume;
+    }
+
+    return volume;
+}
+
+scalar clippedConvexVolumeVMW
+(
+    const boundBox& cellBB,
+    const finiteWallGeometry& wallGeometry,
+    const DynamicList<vector>& particleNormals,
+    const DynamicList<scalar>& particleOffsets,
+    const scalar tolerance,
+    point& occupiedCenter
+)
+{
+    convexPolyhedronVMW polyhedron = cellPolyhedronVMW(cellBB);
+
+    if
+    (
+        !clipPolyhedronVMW
+        (
+            polyhedron,
+            wallGeometry.normal(),
+            -(wallGeometry.normal() & wallGeometry.planePoint()),
+            tolerance
+        )
+    )
+    {
+        return 0;
+    }
+
+    const List<vector>& edgeNormals = wallGeometry.globalEdgeNormals();
+    const List<scalar>& edgeOffsets = wallGeometry.edgeOffsets();
+
+    forAll(edgeNormals, edgeI)
+    {
+        if
+        (
+            !clipPolyhedronVMW
+            (
+                polyhedron,
+                edgeNormals[edgeI],
+                edgeOffsets[edgeI]
+              - (edgeNormals[edgeI] & wallGeometry.planePoint()),
+                tolerance
+            )
+        )
+        {
+            return 0;
+        }
+    }
+
+    forAll(particleNormals, planeI)
+    {
+        if
+        (
+            !clipPolyhedronVMW
+            (
+                polyhedron,
+                particleNormals[planeI],
+                particleOffsets[planeI],
+                tolerance
+            )
+        )
+        {
+            return 0;
+        }
+    }
+
+    return polyhedronVolumeAndCenterVMW(polyhedron, occupiedCenter);
+}
+
+localPolygonVMW clipToConvexParticleVMW
+(
+    const localPolygonVMW& inputPolygon,
+    const finiteWallGeometry& wallGeometry,
+    const DynamicList<vector>& particleNormals,
+    const DynamicList<scalar>& particleOffsets,
+    const scalar tolerance
+)
+{
+    localPolygonVMW clippedPolygon(inputPolygon);
+
+    forAll(particleNormals, planeI)
+    {
+        if (clippedPolygon.empty())
+        {
+            break;
+        }
+
+        localPolygonVMW input(clippedPolygon);
+        clippedPolygon.clear();
+
+        vector previous = input.back();
+        scalar previousValue =
+            (particleNormals[planeI]
+           & wallGeometry.globalCoordinates(previous))
+          + particleOffsets[planeI];
+        bool previousInside = previousValue >= -tolerance;
+
+        for (localPolygonVMW::const_iterator iter = input.begin();
+             iter != input.end(); ++iter)
+        {
+            const vector current = *iter;
+            const scalar currentValue =
+                (particleNormals[planeI]
+               & wallGeometry.globalCoordinates(current))
+              + particleOffsets[planeI];
+            const bool currentInside = currentValue >= -tolerance;
+
+            if (currentInside != previousInside)
+            {
+                const scalar denominator = previousValue - currentValue;
+
+                if (mag(denominator) > VSMALL)
+                {
+                    scalar fraction = previousValue/denominator;
+                    fraction = max(scalar(0), min(scalar(1), fraction));
+                    clippedPolygon.push_back
+                    (
+                        previous + fraction*(current - previous)
+                    );
+                }
+            }
+
+            if (currentInside)
+            {
+                clippedPolygon.push_back(current);
+            }
+
+            previous = current;
+            previousValue = currentValue;
+            previousInside = currentInside;
+        }
+    }
+
+    return clippedPolygon;
+}
+
 } // End anonymous namespace
 
 //---------------------------------------------------------------------------//
@@ -405,7 +857,11 @@ bbMatrix_(vMeshWallInfo.subVolumeNVector,
     vMeshWallInfo.charCellSize,
     vMeshWallInfo.subVolumeV,
     vMeshWallInfo.fitToBBox),
-finiteWallGeometry_()
+finiteWallGeometry_(),
+exactConvexClipping_(false),
+convexParticleNormals_(),
+convexParticleOffsets_(),
+particleClipTolerance_(1e-12)
 {
     if
     (
@@ -419,10 +875,216 @@ finiteWallGeometry_()
         finiteWallGeometry_ =
             finiteWallGeometry::lookup(vMeshWallInfo_.wallName);
     }
+
+    if
+    (
+        finiteWallGeometry_
+     && cGeomModel_.getcType() == convex
+    )
+    {
+        initialiseConvexParticleClipping();
+    }
 }
 
 virtualMeshWall::~virtualMeshWall()
 {
+}
+//---------------------------------------------------------------------------//
+void virtualMeshWall::initialiseConvexParticleClipping()
+{
+    const stlBased* stlGeometry =
+        dynamic_cast<const stlBased*>(&cGeomModel_);
+
+    if (!stlGeometry)
+    {
+        FatalErrorInFunction
+            << "Geometry declared as convex for inclined finite-wall "
+            << "contact, but it does not provide an STL surface."
+            << exit(FatalError);
+    }
+
+    const triSurface& surface = stlGeometry->triSurfaceGeometry();
+    const pointField& points = surface.points();
+
+    if (surface.empty() || points.size() < 4)
+    {
+        FatalErrorInFunction
+            << "Convex particle used for inclined finite-wall contact must "
+            << "contain at least four points and four triangular faces."
+            << exit(FatalError);
+    }
+
+    typedef std::pair<label, label> edgeKey;
+    std::map<edgeKey, label> edgeUseCount;
+    std::vector<bool> referencedPoint(points.size(), false);
+
+    forAll(surface, faceI)
+    {
+        const typename triSurface::FaceType& face = surface[faceI];
+
+        if (face.size() != 3)
+        {
+            FatalErrorInFunction
+                << "Convex particle face " << faceI
+                << " is not triangular."
+                << exit(FatalError);
+        }
+
+        forAll(face, pointI)
+        {
+            const label vertexI = face[pointI];
+
+            if (vertexI < 0 || vertexI >= points.size())
+            {
+                FatalErrorInFunction
+                    << "Convex particle face " << faceI
+                    << " contains invalid point index " << vertexI << "."
+                    << exit(FatalError);
+            }
+
+            referencedPoint[vertexI] = true;
+
+            const label nextVertexI = face[(pointI + 1) % face.size()];
+            const edgeKey edge
+            (
+                min(vertexI, nextVertexI),
+                max(vertexI, nextVertexI)
+            );
+
+            edgeUseCount[edge]++;
+        }
+    }
+
+    for (std::map<edgeKey, label>::const_iterator iter = edgeUseCount.begin();
+         iter != edgeUseCount.end(); ++iter)
+    {
+        if (iter->first.first == iter->first.second || iter->second != 2)
+        {
+            FatalErrorInFunction
+                << "Convex particle STL is not a closed two-manifold: edge ("
+                << iter->first.first << ' ' << iter->first.second
+                << ") is used " << iter->second << " times."
+                << exit(FatalError);
+        }
+    }
+
+    point interiorPoint(vector::zero);
+    label referencedCount = 0;
+
+    forAll(points, pointI)
+    {
+        if (referencedPoint[pointI])
+        {
+            interiorPoint += points[pointI];
+            referencedCount++;
+        }
+    }
+
+    if (referencedCount < 4)
+    {
+        FatalErrorInFunction
+            << "Convex particle STL references fewer than four points."
+            << exit(FatalError);
+    }
+
+    interiorPoint /= scalar(referencedCount);
+
+    const boundBox particleBounds(points, false);
+    particleClipTolerance_ = max
+    (
+        finiteWallGeometry_->tolerance(),
+        scalar(1e-10)*max(mag(particleBounds.span()), scalar(1e-3))
+    );
+
+    forAll(surface, faceI)
+    {
+        const typename triSurface::FaceType& face = surface[faceI];
+        const point& a = points[face[0]];
+        const point& b = points[face[1]];
+        const point& c = points[face[2]];
+        vector inwardNormal = (b - a) ^ (c - a);
+        const scalar twiceFaceArea = mag(inwardNormal);
+
+        if (twiceFaceArea <= sqr(particleClipTolerance_))
+        {
+            FatalErrorInFunction
+                << "Convex particle face " << faceI
+                << " is geometrically degenerate."
+                << exit(FatalError);
+        }
+
+        const scalar centerValue = inwardNormal & (interiorPoint - a);
+
+        if
+        (
+            mag(centerValue)
+         <= particleClipTolerance_*twiceFaceArea
+        )
+        {
+            FatalErrorInFunction
+                << "Convex particle has zero three-dimensional extent at "
+                << "face " << faceI << "."
+                << exit(FatalError);
+        }
+
+        if (centerValue < 0)
+        {
+            inwardNormal = -inwardNormal;
+        }
+
+        inwardNormal /= twiceFaceArea;
+        const scalar offset = -(inwardNormal & a);
+
+        forAll(points, pointI)
+        {
+            if
+            (
+                referencedPoint[pointI]
+             && (inwardNormal & points[pointI]) + offset
+                < -particleClipTolerance_
+            )
+            {
+                FatalErrorInFunction
+                    << "Geometry declared convex is not globally convex: "
+                    << "point " << pointI << " lies outside face "
+                    << faceI << " by "
+                    << -((inwardNormal & points[pointI]) + offset) << "."
+                    << exit(FatalError);
+            }
+        }
+
+        bool duplicatePlane = false;
+
+        forAll(convexParticleNormals_, planeI)
+        {
+            if
+            (
+                mag(inwardNormal - convexParticleNormals_[planeI]) <= 1e-9
+             && mag(offset - convexParticleOffsets_[planeI])
+                <= 10*particleClipTolerance_
+            )
+            {
+                duplicatePlane = true;
+                break;
+            }
+        }
+
+        if (!duplicatePlane)
+        {
+            convexParticleNormals_.append(inwardNormal);
+            convexParticleOffsets_.append(offset);
+        }
+    }
+
+    if (convexParticleNormals_.size() < 4)
+    {
+        FatalErrorInFunction
+            << "Convex particle provides fewer than four distinct support "
+            << "planes."
+            << exit(FatalError);
+    }
+
+    exactConvexClipping_ = true;
 }
 //---------------------------------------------------------------------------//
 bool virtualMeshWall::detectFirstContactPoint()
@@ -903,6 +1565,27 @@ scalar virtualMeshWall::evaluateFiniteCell
         return cellBB.volume();
     }
 
+    if (exactConvexClipping_)
+    {
+        const scalar occupiedVolume = clippedConvexVolumeVMW
+        (
+            cellBB,
+            *finiteWallGeometry_,
+            convexParticleNormals_,
+            convexParticleOffsets_,
+            particleClipTolerance_,
+            occupiedCenter
+        );
+
+        if (occupiedVolume <= VSMALL)
+        {
+            occupiedCenter = cellBB.midpoint();
+            return 0;
+        }
+
+        return occupiedVolume;
+    }
+
     const pointField& normalizedSamplePoints = jointQuadratureVMW();
     const label sampleCount = normalizedSamplePoints.size();
 
@@ -1038,6 +1721,31 @@ scalar virtualMeshWall::evaluateFiniteAreaCell
     if (particleType == volumeType::outside)
     {
         return 0;
+    }
+
+    if (exactConvexClipping_)
+    {
+        planePolygon = clipToConvexParticleVMW
+        (
+            planePolygon,
+            *finiteWallGeometry_,
+            convexParticleNormals_,
+            convexParticleOffsets_,
+            particleClipTolerance_
+        );
+
+        const scalar occupiedArea =
+            polygonAreaAndCenterVMW(planePolygon, localCenter);
+
+        if (occupiedArea <= VSMALL)
+        {
+            occupiedCenter = cellBB.midpoint();
+            return 0;
+        }
+
+        occupiedCenter =
+            finiteWallGeometry_->globalCoordinates(localCenter);
+        return occupiedArea;
     }
 
     if (particleType == volumeType::inside)

@@ -164,6 +164,13 @@ class virtualMeshWall
 
     std::shared_ptr<const finiteWallGeometry> finiteWallGeometry_;
 
+    bool exactConvexClipping_;
+    DynamicVectorList convexParticleNormals_;
+    DynamicScalarList convexParticleOffsets_;
+    scalar particleClipTolerance_;
+
+    void initialiseConvexParticleClipping();
+
     scalar evaluateFiniteCell
     (
         const boundBox& cellBB,
