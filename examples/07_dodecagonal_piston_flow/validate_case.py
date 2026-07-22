@@ -101,8 +101,8 @@ def main() -> int:
         raise AssertionError("HFDIBDEMDict does not include generated addition domain")
     if "addDomain boundBox;" in without_comments(hfdib_text):
         raise AssertionError("Legacy boundBox addition domain remains active")
-    if not re.search(r"\bfieldValue\s+0\.3\s*;", without_comments(hfdib_text)):
-        raise AssertionError("The intended fieldValue 0.3 target changed")
+    if not re.search(r"\bfieldValue\s+0\.03\s*;", without_comments(hfdib_text)):
+        raise AssertionError("The intended 3% fieldValue target changed")
     if not re.search(r"\bnSolidsInDomain\s+2000\s*;", without_comments(hfdib_text)):
         raise AssertionError("The preserved example-04 2000-particle cap changed")
     if not re.search(r"\brandomSeed\s+1207\s*;", without_comments(hfdib_text)):

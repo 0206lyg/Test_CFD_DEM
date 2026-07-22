@@ -61,7 +61,8 @@ wall-force formulas are unchanged by this support extension.
 `y=0.05 m` to `y=0.15 m`. Randomly rotated and scaled arbitrary STL particles
 are accepted only when their full support fits inside the prism. The case
 retains the example-04 cap `nSolidsInDomain 2000`, the target
-`fieldValue 0.3`, and uses deterministic `randomSeed 1207`.
+`fieldValue 0.03`, and uses deterministic `randomSeed 1207`. Particles use
+`rho_p=2500 kg/m3` and zero gravity.
 
 ## Particle-particle projection correction
 
