@@ -89,4 +89,14 @@ forAll(surface, sI)
         surface[sI] = 0;
 }
 
-f += 0.8*surface*(Ui - U)/runTime.deltaT();
+fNext = f + 0.8*surface*(Ui - U)/runTime.deltaT();
+fNext.correctBoundaryConditions();
+
+// Intermediate PISO candidates are consumed by the next pressure correction.
+// The final PISO candidate remains separate until the PIMPLE loop decides
+// whether another outer correction will be performed.
+if (!pimple.finalPisoIter())
+{
+    f = fNext;
+    f.correctBoundaryConditions();
+}

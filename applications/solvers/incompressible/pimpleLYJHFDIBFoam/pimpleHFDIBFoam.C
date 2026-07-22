@@ -169,6 +169,15 @@ int main(int argc, char *argv[])
                 laminarTransport.correct();
                 turbulence->correct();
             }
+
+            // Promote the candidate from the final PISO correction only when
+            // another PIMPLE correction will consume it.  On the final outer
+            // correction, f remains the forcing actually used by the fluid.
+            if (!pimple.finalPimpleIter())
+            {
+                f = fNext;
+                f.correctBoundaryConditions();
+            }
         }
         CFDTime_ += pimpleRunClockTime.timeIncrement();
         Info << "updating HFDIBDEM" << endl;

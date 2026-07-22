@@ -71,6 +71,21 @@ volVectorField f
     mesh
 );
 
+// Candidate HFDIB forcing.  It is promoted only when another fluid
+// correction will consume it; the final unconsumed candidate is discarded.
+volVectorField fNext
+(
+    IOobject
+    (
+        "fNext",
+        runTime.timeName(),
+        mesh,
+        IOobject::NO_READ,
+        IOobject::NO_WRITE
+    ),
+    f
+);
+
 InfoH<< "Reading field refineF\n" << endl;
 volScalarField refineF
 (
