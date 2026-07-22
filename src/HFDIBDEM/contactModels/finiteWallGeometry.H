@@ -88,6 +88,16 @@ class finiteWallGeometry
         return localVertices_;
     }
 
+    const List<vector>& globalEdgeNormals() const
+    {
+        return globalEdgeNormals_;
+    }
+
+    const List<scalar>& edgeOffsets() const
+    {
+        return edgeOffsets_;
+    }
+
     const boundBox& patchBounds() const
     {
         return patchBounds_;
