@@ -241,6 +241,11 @@ namespace Foam
             return bodySurfMesh_.points();
         }
 
+        const triSurface& triSurfaceGeometry() const
+        {
+            return triSurf_();
+        }
+
         void setBodyPosition(pointField pos) final override;
     };
 }
