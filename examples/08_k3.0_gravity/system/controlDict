@@ -1,0 +1,45 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  8                                     |
+|   \\  /    A nd           | Web:      www.OpenFOAM.org                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      controlDict;
+}
+
+application      HFDIBDEMFoam;
+
+// Start at zero so the inlet source is filled before the first time step.
+startFrom        startTime;
+startTime        0;
+
+stopAt           endTime;
+endTime          1.0;
+
+deltaT           1e-3;
+adjustTimeStep   no;
+
+writeControl     adjustableRunTime;
+writeInterval    0.01;
+
+purgeWrite       0;
+writeFormat      ascii;
+writePrecision   8;
+writeCompression uncompressed;
+
+timeFormat       general;
+timePrecision    8;
+
+maxCo            0.7;
+maxDeltaT        1e-3;
+
+runTimeModifiable yes;
+
+// ************************************************************************* //
