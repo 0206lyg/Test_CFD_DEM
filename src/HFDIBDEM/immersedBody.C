@@ -49,6 +49,9 @@ Contributors
 #include "fvMeshSubset.H"
 #include "solverInfo.H" 
 
+#include <fstream>
+#include <iomanip>
+
 #define ORDER 2
 
 using namespace Foam;
@@ -1058,8 +1061,61 @@ void immersedBody::switchActiveOff
     volScalarField& body
 )
 {
+    const bool wasActive = isActive_;
+
     // turn of the particle
     isActive_ = false;
+
+    // Bodies with no valid reference mass were never valid particles and are
+    // not discharge events.
+    if
+    (
+        wasActive
+     && Pstream::master()
+     && geomModel_->getM0() >= SMALL
+    )
+    {
+        const fileName caseDir
+        (
+            mesh_.time().rootPath()/mesh_.time().globalCaseName()
+        );
+        const fileName postDir(caseDir/"postProcessing");
+        const fileName exitFile(postDir/"particleExit.dat");
+
+        if (!isDir(postDir))
+        {
+            mkDir(postDir);
+        }
+
+        const bool writeHeader = !isFile(exitFile);
+        std::ofstream output
+        (
+            exitFile.c_str(),
+            std::ios::out | std::ios::app
+        );
+
+        if (output.good())
+        {
+            const vector exitPosition(geomModel_->getCoM());
+
+            if (writeHeader)
+            {
+                output << "# time bodyId x y z" << std::endl;
+            }
+
+            output << std::setprecision(16)
+                << mesh_.time().value() << ' '
+                << bodyId_ << ' '
+                << exitPosition.x() << ' '
+                << exitPosition.y() << ' '
+                << exitPosition.z() << std::endl;
+        }
+        else
+        {
+            WarningInFunction
+                << "Cannot open particle exit file " << exitFile << endl;
+        }
+    }
 
     // rewrite the body field
     geomModel_->resetBody(body);
