@@ -244,6 +244,14 @@ void addModelRepeatRandomPosition::init()
         InfoH << addModel_Info << "-- addModelMessage-- "
             << "source STL will be randomly rotated upon addition" << endl;
 	}
+	else if (rotationMode_ == "uniformRandomRotation")
+	{
+		rotateParticles_ = true;
+		randomAxis_      = false;
+        InfoH << addModel_Info << "-- addModelMessage-- "
+            << "source STL orientation will be sampled uniformly in 3D "
+            << "upon addition" << endl;
+	}
 	else if (rotationMode_ == "fixedAxisRandomRotation")
 	{
 		axisOfRot_       = (rotationModeCoeffs_.lookup("axis"));
@@ -324,14 +332,59 @@ std::shared_ptr<geomModel> addModelRepeatRandomPosition::addBody
     // rotate
     if (rotateParticles_)
     {
-        scalar rotAngle = returnRandomAngle();
-        if (randomAxis_)
+        scalar rotAngle(0);
+        if (rotationMode_ == "uniformRandomRotation")
         {
-            axisOfRot_ = returnRandomRotationAxis();
+            // Shoemake's construction: three uniform random values produce a
+            // quaternion distributed uniformly over SO(3).
+            const scalar u1 = randGen_.scalar01();
+            const scalar u2 = randGen_.scalar01();
+            const scalar u3 = randGen_.scalar01();
+
+            const scalar twoPi =
+                2.0*Foam::constant::mathematical::pi;
+            const scalar rootOneMinusU1 = Foam::sqrt(1.0 - u1);
+            const scalar rootU1 = Foam::sqrt(u1);
+
+            vector quaternionVector
+            (
+                rootOneMinusU1*Foam::sin(twoPi*u2),
+                rootOneMinusU1*Foam::cos(twoPi*u2),
+                rootU1*Foam::sin(twoPi*u3)
+            );
+            scalar quaternionScalar = rootU1*Foam::cos(twoPi*u3);
+
+            // q and -q represent the same rotation. Keep the angle in [0, pi].
+            if (quaternionScalar < 0.0)
+            {
+                quaternionScalar = -quaternionScalar;
+                quaternionVector = -quaternionVector;
+            }
+
+            const scalar sinHalfAngle = mag(quaternionVector);
+            if (sinHalfAngle > SMALL)
+            {
+                axisOfRot_ = quaternionVector/sinHalfAngle;
+                rotAngle =
+                    2.0*Foam::atan2(sinHalfAngle, quaternionScalar);
+            }
+            else
+            {
+                axisOfRot_ = vector(1.0, 0.0, 0.0);
+                rotAngle = 0.0;
+            }
+        }
+        else
+        {
+            rotAngle = returnRandomAngle();
+            if (randomAxis_)
+            {
+                axisOfRot_ = returnRandomRotationAxis();
+            }
         }
         InfoH << addModel_Info << "-- addModelMessage-- "
             << "Will rotate by " << rotAngle
-            << " PiRad around axis " << axisOfRot_ << endl;
+            << " rad around axis " << axisOfRot_ << endl;
 
         geomModel_->bodyRotatePoints(rotAngle,axisOfRot_);
         //~ CoM = gSum(bodySurfMesh.coordinates())/bodySurfMesh.size();
