@@ -5,18 +5,19 @@
     forAll (bodyNames_,nameI)
     {
         word bodyName(bodyNames_[nameI]);
+        const dictionary& bodyDict(HFDIBDEMDict_.subDict(bodyName));
         InfoH << addModel_Info << "-- addModelMessage-- "
             << "Creating addition model for body: " << bodyName << endl;
 
         // initialize the addition models
-        dictionary addModelDict(HFDIBDEMDict_.subDict(bodyName).subDict("bodyAddition"));
+        dictionary addModelDict(bodyDict.subDict("bodyAddition"));
         word howToAdd(word(addModelDict.lookup("addModel")));
         word bodyGeom;
         std::unique_ptr<geomModel> bodyGeomModel;
         // check if the immersedDict_ contains bodyGeom
-        if (HFDIBDEMDict_.subDict(bodyName).found("bodyGeom"))
+        if (bodyDict.found("bodyGeom"))
         {
-            word input = HFDIBDEMDict_.subDict(bodyName).lookup("bodyGeom");
+            word input = bodyDict.lookup("bodyGeom");
             bodyGeom = input;
             InfoH << iB_Info << "Found bodyGeom for " << bodyName
                 << ", the body is: " << bodyGeom << endl;
@@ -28,31 +29,43 @@
                 << bodyName << ", using bodyGeom: " << bodyGeom << endl;
         }
 
+        // Decouple the logical body/addition-model name from the STL basename.
+        // Existing dictionaries remain unchanged when stlBaseName is absent.
+        word stlBaseName(bodyName);
+        if (bodyDict.found("stlBaseName"))
+        {
+            stlBaseName = word(bodyDict.lookup("stlBaseName"));
+        }
+        word stlPath("constant/triSurface/"+stlBaseName+".stl");
+
         if(bodyGeom == "convex")
         {
-            word stlPath("constant/triSurface/"+bodyName+".stl");
+            InfoH << iB_Info << "Using STL source for " << bodyName
+                << ": " << stlPath << endl;
             bodyGeomModel = std::unique_ptr<convexBody>(
                 new convexBody(mesh_,stlPath,thrSurf));
         }
         else if(bodyGeom == "nonConvex")
         {
-            word stlPath("constant/triSurface/"+bodyName+".stl");
+            InfoH << iB_Info << "Using STL source for " << bodyName
+                << ": " << stlPath << endl;
             bodyGeomModel = std::unique_ptr<nonConvexBody>(
                 new nonConvexBody(mesh_,stlPath,thrSurf));
         }
         else if(bodyGeom == "sphere")
         {
-            vector startPosition = HFDIBDEMDict_.subDict(bodyName).subDict("sphere").lookup("startPosition");
-            scalar radius = readScalar(HFDIBDEMDict_.subDict(bodyName).subDict("sphere").lookup("radius"));
+            vector startPosition = bodyDict.subDict("sphere").lookup("startPosition");
+            scalar radius = readScalar(bodyDict.subDict("sphere").lookup("radius"));
 
             bodyGeomModel = std::unique_ptr<sphereBody>(
                 new sphereBody(mesh_,startPosition,radius,thrSurf));
         }
         else
         {
-            word stlPath("constant/triSurface/"+bodyName+".stl");
             InfoH << iB_Info << "bodyGeom: " << bodyGeom
                 << " not supported, using bodyGeom nonConvex" << endl;
+            InfoH << iB_Info << "Using STL source for " << bodyName
+                << ": " << stlPath << endl;
             bodyGeom = "nonConvex";
             bodyGeomModel = std::unique_ptr<nonConvexBody>(
                 new nonConvexBody(mesh_,stlPath,thrSurf));
