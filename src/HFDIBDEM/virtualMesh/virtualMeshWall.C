@@ -1894,46 +1894,93 @@ void virtualMeshWall::checkSubVolume
     }
     else if (cellType == volumeType::mixed)
     {
-        boundBox limitedBB(cellBB);
-
-        if
-        (
-            cGeomModel_.limitFinalSubVolume
-            (
-                particleCell,
-                true,
-                limitedBB
-            )
-        )
+        if (cGeomModel_.getcType() == sphere)
         {
-            vector limitedMin = limitedBB.min();
-            vector limitedMax = limitedBB.max();
-            bool validLimitedBB = true;
+            // Analytic AABB classification rejects full outside cells and
+            // accepts full inside cells above.  Only curved boundary cells
+            // require this implicit-sphere quadrature.
+            const pointField& normalizedSamplePoints =
+                jointQuadratureVMW();
+            const vector cellSpan(cellBB.span());
 
-            for (label dir = 0; dir < 3; dir++)
+            label occupiedSamples = 0;
+            occupiedCenter = vector::zero;
+
+            forAll(normalizedSamplePoints, sampleI)
             {
-                limitedMin[dir] = max
-                (
-                    limitedMin[dir],
-                    cellBB.min()[dir]
-                );
-                limitedMax[dir] = min
-                (
-                    limitedMax[dir],
-                    cellBB.max()[dir]
-                );
+                point samplePoint(cellBB.min());
 
-                if ((limitedMax[dir] - limitedMin[dir]) <= VSMALL)
+                for (label dir = 0; dir < 3; dir++)
                 {
-                    validLimitedBB = false;
+                    samplePoint[dir] +=
+                        normalizedSamplePoints[sampleI][dir]
+                       *cellSpan[dir];
+                }
+
+                if (cGeomModel_.pointInside(samplePoint))
+                {
+                    occupiedSamples++;
+                    occupiedCenter += samplePoint;
                 }
             }
 
-            if (validLimitedBB)
+            if (occupiedSamples > 0)
             {
-                limitedBB = boundBox(limitedMin, limitedMax);
-                occupiedVolume = limitedBB.volume();
-                occupiedCenter = limitedBB.midpoint();
+                occupiedVolume =
+                    cellBB.volume()
+                   *scalar(occupiedSamples)
+                   /scalar(normalizedSamplePoints.size());
+
+                occupiedCenter /= scalar(occupiedSamples);
+            }
+            else
+            {
+                occupiedCenter = cellBB.midpoint();
+            }
+        }
+        else
+        {
+            boundBox limitedBB(cellBB);
+
+            if
+            (
+                cGeomModel_.limitFinalSubVolume
+                (
+                    particleCell,
+                    true,
+                    limitedBB
+                )
+            )
+            {
+                vector limitedMin = limitedBB.min();
+                vector limitedMax = limitedBB.max();
+                bool validLimitedBB = true;
+
+                for (label dir = 0; dir < 3; dir++)
+                {
+                    limitedMin[dir] = max
+                    (
+                        limitedMin[dir],
+                        cellBB.min()[dir]
+                    );
+                    limitedMax[dir] = min
+                    (
+                        limitedMax[dir],
+                        cellBB.max()[dir]
+                    );
+
+                    if ((limitedMax[dir] - limitedMin[dir]) <= VSMALL)
+                    {
+                        validLimitedBB = false;
+                    }
+                }
+
+                if (validLimitedBB)
+                {
+                    limitedBB = boundBox(limitedMin, limitedMax);
+                    occupiedVolume = limitedBB.volume();
+                    occupiedCenter = limitedBB.midpoint();
+                }
             }
         }
     }
