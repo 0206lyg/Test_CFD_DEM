@@ -224,7 +224,7 @@ virtualMesh
 
 PH_SC_prefill
 {
-    // Both logical particle sources use the same PH_SC.stl geometry template.
+    // Used only when bodyGeom is convex. The implicit-sphere path ignores it.
     stlBaseName PH_SC;
 
     fullyCoupledBody
@@ -243,8 +243,8 @@ PH_SC_prefill
 
     bodyAddition
     {
-        // Fill the lower 40 mm of the upper reservoir once at time zero.
-        // The persistent top inlet below fills the remaining 10 mm.
+        // Fill the complete upper reservoir once at time zero. The persistent
+        // top source below subsequently replenishes only its 10 mm slab.
         addModel onceScatter;
 
         onceScatterCoeffs
@@ -273,8 +273,16 @@ PH_SC_prefill
                 maxScale 0.98521235637496851;
             }
 
+            noScalingCoeffs
+            {
+            }
+
             rotationMode uniformRandomRotation;
             uniformRandomRotationCoeffs
+            {
+            }
+
+            noRotationCoeffs
             {
             }
         }
@@ -282,6 +290,15 @@ PH_SC_prefill
 
     material         particle;
     bodyGeom         convex;
+    // The parametric Slurm script selects this geometry and overwrites radius
+    // with D_pore/(2*k). The base radius below is d_eq,0/2, so manually changing
+    // only bodyGeom to sphere also remains consistent with the default STL
+    // randomScaling value and gives k = 3.00.
+    sphere
+    {
+        startPosition (0 0.050 0);
+        radius        0.001691682667074;
+    }
     updateTorque     true;
     sdBasedLambda    false;
     interfaceSpan    1.0;
@@ -292,6 +309,7 @@ PH_SC_prefill
 
 PH_SC_inlet
 {
+    // Used only when bodyGeom is convex. The implicit-sphere path ignores it.
     stlBaseName PH_SC;
 
     fullyCoupledBody
@@ -336,8 +354,16 @@ PH_SC_inlet
                 maxScale 0.98521235637496851;
             }
 
+            noScalingCoeffs
+            {
+            }
+
             rotationMode uniformRandomRotation;
             uniformRandomRotationCoeffs
+            {
+            }
+
+            noRotationCoeffs
             {
             }
         }
@@ -345,6 +371,11 @@ PH_SC_inlet
 
     material         particle;
     bodyGeom         convex;
+    sphere
+    {
+        startPosition (0 0.070 0);
+        radius        0.001691682667074;
+    }
     updateTorque     true;
     sdBasedLambda    false;
     interfaceSpan    1.0;
