@@ -35,6 +35,7 @@ Contributors
 #include "wallMatInfo.H"
 #include "wallPlaneInfo.H"
 #include "finiteWallGeometry.H"
+#include "periodicBody.H"
 
 #include "virtualMeshLevel.H"
 #include "contactModelInfo.H"
@@ -918,6 +919,66 @@ bool wallContactInfo::detectWallContact(
 //---------------------------------------------------------------------------//
 void wallContactInfo::findContactAreas()
 {
+    if (ibContactClass_.getGeomModel().getcType() == cluster)
+    {
+        periodicBody& cCluster = dynamic_cast<periodicBody&>
+        (
+            ibContactClass_.getGeomModel()
+        );
+
+        std::vector<std::shared_ptr<geomModel>>& clusterBodies =
+            cCluster.getClusterBodies();
+
+        // Build finite-wall virtual meshes on the assigned MPI rank and from
+        // each child bound.  Scanning the parent periodic AABB would include
+        // the empty span between periodic images and can be prohibitively
+        // expensive.  Existing analytic child subcontacts remain untouched.
+        for (std::shared_ptr<geomModel>& childModel : clusterBodies)
+        {
+            ibContactClass childClass
+            (
+                childModel,
+                ibContactClass_.getMatInfo().getMaterial()
+            );
+
+            ibContactVars childVars
+            (
+                bodyId_,
+                ibContactVars_.Vel_,
+                ibContactVars_.omega_,
+                ibContactVars_.Axis_,
+                childModel->getM0(),
+                childModel->getM(),
+                childModel->getRhoS()
+            );
+
+            wallContactInfo childWallInfo(childClass, childVars);
+
+            if (!childWallInfo.detectWallContact())
+            {
+                continue;
+            }
+
+            childWallInfo.findContactAreas();
+
+            std::vector<std::shared_ptr<wallSubContactInfo>>& childContacts =
+                childWallInfo.getWallSCList();
+
+            subCList_.insert
+            (
+                subCList_.end(),
+                childContacts.begin(),
+                childContacts.end()
+            );
+
+            // Preserve detectWallContact_Cluster() semantics: the first
+            // contacting periodic image represents the physical particle.
+            break;
+        }
+
+        return;
+    }
+
     List<string> infinitePatches;
     List<string> finitePatches;
 
@@ -933,15 +994,23 @@ void wallContactInfo::findContactAreas()
         }
     }
 
-    pointField bodyPoints = ibContactClass_.getGeomModel().getBodyPoints();
-
     // --------------------------------------------------------------------- //
     // Original infinite-wall path.
     // Keep finite walls out of this branch so finite patch clipping cannot
     // change the contact volume used for bottom/top/etc. infinite walls.
+    // Sphere infinite contacts already own analytic subcontacts created during
+    // detection.  Periodic clusters were handled child-by-child above.
     // --------------------------------------------------------------------- //
-    if(infinitePatches.size() > 0)
+    if
+    (
+        infinitePatches.size() > 0
+     && ibContactClass_.getGeomModel().getcType() != sphere
+     && ibContactClass_.getGeomModel().getcType() != cluster
+    )
     {
+        pointField bodyPoints =
+            ibContactClass_.getGeomModel().getBodyPoints();
+
         autoPtr<DynamicVectorList> contactSTLPoints(
             new DynamicVectorList);
 

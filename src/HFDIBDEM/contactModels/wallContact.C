@@ -174,35 +174,66 @@ bool detectWallContact_Sphere(
     {
         vector cCenter(wallCntInfo.getcClass().getGeomModel().getCoM());
         List<string>& contactPatches = wallCntInfo.getContactPatches();
-        List<string> contactPatchesTmp;
+        List<string> validContactPatches;
+        List<string> infiniteContactPatches;
+        const scalar radius =
+            wallCntInfo.getcClass().getGeomModel().getDC()/2;
+
+        const HashTable<bool,string,Hash<string>>& finiteInfo =
+            wallPlaneInfo::getWallFiniteInfo();
+
         forAll(contactPatches, patchI)
         {
-            List<vector> planeInfo = wallPlaneInfo::getWallPlaneInfo()[contactPatches[patchI]];
+            const string& patchName = contactPatches[patchI];
+
+            if (finiteInfo.found(patchName) && finiteInfo[patchName])
+            {
+                // The existing finite-wall virtual mesh performs finite
+                // support clipping and analytic sphere cell classification;
+                // mixed cells remain controlled by the virtual-mesh level.
+                validContactPatches.append(patchName);
+                continue;
+            }
+
+            List<vector> planeInfo =
+                wallPlaneInfo::getWallPlaneInfo()[patchName];
+
             plane p(planeInfo[1], planeInfo[0]);
             point nearestPoint = p.nearestPoint(cCenter);
-            if(mag(cCenter - nearestPoint)-wallCntInfo.getcClass().getGeomModel().getDC()/2 > 0)
+
+            if (magSqr(cCenter - nearestPoint) > sqr(radius))
             {
                 continue;
             }
-            contactPatchesTmp.append(contactPatches[patchI]);
+
+            validContactPatches.append(patchName);
+            infiniteContactPatches.append(patchName);
         }
-        contactPatches = contactPatchesTmp;
+
+        contactPatches = validContactPatches;
         
         if(contactPatches.size() == 0)
         {
             return false;
         }
-        wallCntInfo.getWallSCList().emplace_back(
-            std::make_shared<wallSubContactInfo>(
-                List<Tuple2<point,boundBox>>(),
-                List<Tuple2<point,boundBox>>(),
-                wallCntInfo.getContactPatches(),
-                List<Tuple2<point,boundBox>>(),
-                wallCntInfo.getWallMeanPars(),
-                ibClass.getGeomModel().getBounds(),
-                wallCntInfo.getBodyId()
-            )
-        );
+
+        // Infinite patches retain the original analytic sphere path.  Finite
+        // patches receive their independent virtual-mesh subcontacts later in
+        // wallContactInfo::findContactAreas().
+        if (infiniteContactPatches.size() > 0)
+        {
+            wallCntInfo.getWallSCList().emplace_back(
+                std::make_shared<wallSubContactInfo>(
+                    List<Tuple2<point,boundBox>>(),
+                    List<Tuple2<point,boundBox>>(),
+                    infiniteContactPatches,
+                    List<Tuple2<point,boundBox>>(),
+                    wallCntInfo.getWallMeanPars(),
+                    ibClass.getGeomModel().getBounds(),
+                    wallCntInfo.getBodyId()
+                )
+            );
+        }
 
         return true;
     }
@@ -285,13 +316,35 @@ void getWallContactVars(
 {
     if (wallCntInfo.getcClass().getGeomModel().getcType() == sphere)
     {
-        getWallContactVars_Sphere
+        string finiteWallName;
+
+        if
         (
-            mesh,
-            wallCntInfo,
-            deltaT,
-            sWC
-        );
+            singleFiniteWallPatchContact
+            (
+                sWC.getContactPatches(),
+                finiteWallName
+            )
+        )
+        {
+            getWallContactVars_ArbShape
+            (
+                mesh,
+                wallCntInfo,
+                deltaT,
+                sWC
+            );
+        }
+        else
+        {
+            getWallContactVars_Sphere
+            (
+                mesh,
+                wallCntInfo,
+                deltaT,
+                sWC
+            );
+        }
     }
     else if(wallCntInfo.getcClass().getGeomModel().getcType() == cluster)
     {
@@ -555,7 +608,7 @@ void getWallContactVars_Sphere(
 {
     vector cCenter(wallCntInfo.getcClass().getGeomModel().getCoM());
 
-    List<string>& contactPatches = wallCntInfo.getContactPatches();
+    const List<string>& contactPatches = sCW.getContactPatches();
 
     List<wallContactVars> wallCntVarsList;
     forAll(contactPatches, patchI)
