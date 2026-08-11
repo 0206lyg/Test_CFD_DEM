@@ -3,16 +3,16 @@
 This case isolates gravity-driven DEM contact and clogging from all fluid
 equations. It runs with `HFDIBDEMFoam` and the same `openHFDIBDEM` contact
 library used by the coupled solvers. Particle shape, gravitational acceleration,
-and the pore-to-particle size ratio can be selected by the external workstation
-submission script without further library changes after the one-time patch in
-this overlay is built.
+and the pore-to-particle size ratio are selected by the supplied workstation
+submission script.
 
 ## Geometry
 
 - Axis-aligned square reservoir: 40 mm x 40 mm, y = 25--75 mm
 - Axis-aligned square throat: 10 mm x 10 mm, y = 0--25 mm
 - Linear contraction ratio: 4:1
-- Available templates: `icosahedral.stl`, `cylinder.stl`, and `cube.stl`
+- Available shapes: `icosahedral.stl`, `cylinder.stl`, `cube.stl`, and an
+  implicit center-radius sphere
 - Common unscaled volume: approximately 20.278942696 mm3
 - Common unscaled volume-equivalent diameter: 3.383365334148 mm
 - Default `PH_SC.stl`: the icosahedral template
@@ -23,8 +23,10 @@ this overlay is built.
 - Total mesh size: 82,500 cells
 
 The three template meshes are closed, convex, and equal-volume to numerical
-precision. The `cylinder` template is a regular octagonal prism with a bounding
-length-to-diameter ratio of 3.
+precision. The implicit sphere is normalized through its volume-equivalent
+diameter, so all four shapes use the same definition of `k`. The `cylinder`
+template is a regular octagonal prism with a bounding length-to-diameter ratio
+of 3.
 
 ## Particle-size convention
 
@@ -35,12 +37,21 @@ volume-equivalent particle diameter:
 k = D_pore / d_eq
 d_eq,target = D_pore / k
 scale = D_pore / (k d_eq,0)
+R_sphere,target = D_pore / (2k)
 ```
 
-Here, `D_pore = 0.010 m` and `d_eq,0 = 0.003383365334148 m`. The insertion
-model uses `randomScaling` with identical `minScale` and `maxScale`, which
-makes the scale deterministic and keeps all particles monodisperse. The
-workstation submission script overwrites both limits with the requested value.
+Here, `D_pore = 0.010 m` and the STL reference diameter is
+`d_eq,0 = 0.003383365334148 m`. For an STL particle, the insertion model uses
+`randomScaling` with identical `minScale` and `maxScale`; the submission script
+overwrites both limits with the requested deterministic scale. For an implicit
+sphere, the script writes the target radius directly and selects `noScaling`,
+preventing the radius from being scaled a second time. Both routes are
+monodisperse and satisfy the same requested `k` exactly.
+
+Finite-wall contact for the implicit sphere uses the same virtual-mesh controls
+as the STL path. In particular, increasing `virtualMesh.level` or decreasing
+`virtualMesh.charCellSize` refines finite-wall overlap integration. Analytic
+sphere--sphere and infinite-wall contacts remain on their existing paths.
 
 The lower `bottomOutlet` and upper `topOpen` mesh patches are deliberately
 absent from `DEM/collisionPatches`. Only the 12 side/shoulder patches collide
@@ -48,39 +59,36 @@ with particles.
 
 ## Initial reservoir loading and runtime inlet
 
-Two logical addition models use the same `constant/triSurface/PH_SC.stl` file.
-The optional `stlBaseName PH_SC` entry decouples the addition-model name from
-the STL basename; no duplicate or symbolic-link STL files are required.
+Two logical addition models use the same selected geometry. For an STL shape,
+both use `constant/triSurface/PH_SC.stl`; `stlBaseName PH_SC` decouples the
+addition-model names from the STL basename, so duplicate or symbolic-link STL
+files are unnecessary. For a sphere, both use their local `sphere` dictionary
+and the STL entry is ignored.
 
-At time zero, `PH_SC_prefill` uses `onceScatter` to fill the lower 40 mm of the
-upper reservoir,
-`(-0.020, 0.025, -0.020)`--`(0.020, 0.065, 0.020)` m, to `fieldValue 0.20`.
-It never replenishes that region after time advances. `PH_SC_inlet` controls
-the disjoint upper 10 mm slab,
+At time zero, `PH_SC_prefill` uses `onceScatter` to fill the complete upper
+reservoir,
+`(-0.020, 0.025, -0.020)`--`(0.020, 0.075, 0.020)` m, to `fieldValue 0.20`.
+It never replenishes that region after time advances. `PH_SC_inlet` monitors
+the upper 10 mm slab,
 `(-0.020, 0.065, -0.020)`--`(0.020, 0.075, 0.020)` m, and replenishes it during
-the run with `repeatRandomPosition`. Together they target mean `lambda = 0.20`
-over the two subregions of the 40 mm x 40 mm x 50 mm upper reservoir without
-initializing the throat.
-
-Because each candidate particle must fit inside its own insertion box, the
-artificial split at `y = 0.065 m` can produce a transient particle-depleted
-band around that plane. It is not a wall and closes after particles start
-moving, but the initial vertical concentration profile should be checked and
-the same loading protocol should be used in paired gravity and flow cases.
+the run with `repeatRandomPosition`. The top slab is therefore a replenishment
+zone nested inside the prefilled reservoir, not a second disjoint initial layer.
+Neither source initializes the throat.
 
 For the default exact `k = 3.00`, the geometric expectation is approximately
-660 particles in the lower prefill and 165 in the top slab, or 825 total.
-The actual count is controlled by the Eulerian `lambda` field and can differ
-slightly with shape, orientation, and the final accepted particle. The
-`nSolidsInDomain 100000` value is chosen as a non-binding constructor-time
-ceiling over the intended, mesh-resolved `k` range; it is not a requested
-particle count or a runtime replenishment limit.
+825 particles in the complete upper reservoir. The actual count is controlled
+by the Eulerian `lambda` field and can differ slightly with shape, orientation,
+and the final accepted particle. The `nSolidsInDomain 10000` value is a
+non-binding constructor-time ceiling over the intended, mesh-resolved `k`
+range; it is not a requested particle count or a runtime replenishment limit.
 
-Both models are monodisperse and use `uniformRandomRotation`. The patched
-`onceScatter` model uses Shoemake quaternion sampling, matching the existing
-uniform SO(3) proposal in `repeatRandomPosition`. Overlap rejection can still
-bias the set of accepted orientations in a crowded region; the orientation
-proposals themselves are uniform.
+STL particles use `uniformRandomRotation`. The patched `onceScatter` model uses
+Shoemake quaternion sampling, matching the existing uniform SO(3) proposal in
+`repeatRandomPosition`. Overlap rejection can still bias the set of accepted
+orientations in a crowded region; the orientation proposals themselves are
+uniform. The sphere branch selects `noRotation`, since rotating a center-radius
+sphere does not alter its geometry. `updateTorque true` is retained for its
+frictional spin dynamics.
 
 All particles start from rest (`velocity (0 0 0)` and `startSynced false`). A
 coupled-flow comparison should use the same particle-velocity conditioning;
@@ -93,22 +101,26 @@ solver advances and may try the inlet again later.
 
 ## Workstation submission
 
-The external `run_08_gravity_parametric.sh` script keeps machine-specific
-paths outside the repository. It copies the selected template once to the
-run-local `constant/triSurface/PH_SC.stl`, writes the requested gravity, and
-writes the same requested scale to both logical addition models. It uses the
-following run-directory format:
+Edit only the user-input section near the top of
+`run_08_gravity_parametric.sh`. For the three STL shapes, the script copies the
+selected template once to the run-local `constant/triSurface/PH_SC.stl` and
+writes the same requested scale to both logical addition models. For `sphere`,
+it selects `bodyGeom sphere`, writes `D_pore/(2k)` to both radius entries, and
+selects `noScaling` and `noRotation`. It also writes gravity and synchronizes
+`numberOfSubdomains` with `SLURM_NTASKS`. Run directories use this format:
 
 ```text
 <particle>_k<k>_g<g>_<SLURM_JOB_ID>
 ```
 
-For example, `cube_k3.0_g20_14572831`.
+For example, `sphere_k2.5_g2_14572831`.
 
 ## Build and run
 
-This update changes `addModelOnceScatter.C` and the library-side
-`initializeAddModels.H`. Rebuild the shared library after applying the overlay:
+The dictionary and Slurm-script changes in this control overlay do not require
+compilation. Implicit-sphere contact with finite walls does require the
+previous finite-wall sphere source overlay to be applied and the shared library
+to be rebuilt once:
 
 ```sh
 (cd src/HFDIBDEM && wmake libso)
@@ -127,10 +139,9 @@ From this case directory:
 ```
 
 Direct `./Allrun` uses the icosahedral `PH_SC.stl`, `k = 3.00`, and
-`g = (0 -2 0) m/s2`. It performs the one-time lower-reservoir prefill and then
-maintains the top inlet slab. The external submission script overrides the
-shape, size, and gravity in the run-local copy without changing the source
-case.
+`g = (0 -2 0) m/s2`. It performs the one-time complete-reservoir prefill and
+then maintains the top inlet slab. The submission script overrides the shape,
+size, and gravity in the run-local copy without changing the source case.
 
 The configured DEM substep is `stepDEM*deltaT = 1e-5 s`. Treat this as a
 performance candidate rather than an already converged contact timestep. The
