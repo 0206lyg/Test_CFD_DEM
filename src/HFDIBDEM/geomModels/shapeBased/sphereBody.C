@@ -222,10 +222,11 @@ void sphereBody::synchronPos(label owner)
 boolList sphereBody::pointInside(pointField pointI)
 {
     boolList inside(pointI.size());
+    const scalar radiusSqr = sqr(radius_);
 
     forAll(pointI,point)
     {
-        inside[point] = mag(position_-pointI[point]) < radius_;
+        inside[point] = magSqr(position_-pointI[point]) < radiusSqr;
     }
 
     return inside;
@@ -233,7 +234,125 @@ boolList sphereBody::pointInside(pointField pointI)
 //---------------------------------------------------------------------------//
 bool sphereBody::pointInside(point pointI)
 {
-    return mag(position_-pointI) < radius_;
+    return magSqr(position_-pointI) < sqr(radius_);
+}
+//---------------------------------------------------------------------------//
+volumeType sphereBody::getVolumeType(subVolume& sv, bool cIb)
+{
+    (void)cIb;
+
+    scalar minDistanceSqr = 0;
+    scalar maxDistanceSqr = 0;
+
+    for (label dir = 0; dir < 3; dir++)
+    {
+        scalar nearDistance = 0;
+
+        if (position_[dir] < sv.min()[dir])
+        {
+            nearDistance = sv.min()[dir] - position_[dir];
+        }
+        else if (position_[dir] > sv.max()[dir])
+        {
+            nearDistance = position_[dir] - sv.max()[dir];
+        }
+
+        const scalar farDistance = max
+        (
+            mag(sv.min()[dir] - position_[dir]),
+            mag(sv.max()[dir] - position_[dir])
+        );
+
+        minDistanceSqr += sqr(nearDistance);
+        maxDistanceSqr += sqr(farDistance);
+    }
+
+    const scalar radiusSqr = sqr(radius_);
+
+    if (minDistanceSqr > radiusSqr)
+    {
+        return volumeType::outside;
+    }
+
+    if (maxDistanceSqr < radiusSqr)
+    {
+        return volumeType::inside;
+    }
+
+    return volumeType::mixed;
+}
+//---------------------------------------------------------------------------//
+bool sphereBody::limitFinalSubVolume
+(
+    const subVolume& sv,
+    bool cIb,
+    boundBox& limBBox
+)
+{
+    (void)cIb;
+
+    point limitedMin(sv.min());
+    point limitedMax(sv.max());
+    const scalar radiusSqr = sqr(radius_);
+
+    // Compute the exact Cartesian bounds of the sphere-box intersection.
+    // Generic particle-particle virtual meshes use this as their established
+    // mixed-cell bounding-box approximation.  Finite-wall sphere contacts use
+    // direct pointInside quadrature in virtualMeshWall instead.
+    for (label dir = 0; dir < 3; dir++)
+    {
+        scalar transverseDistanceSqr = 0;
+
+        for (label otherDir = 0; otherDir < 3; otherDir++)
+        {
+            if (otherDir == dir)
+            {
+                continue;
+            }
+
+            scalar distance = 0;
+
+            if (position_[otherDir] < sv.min()[otherDir])
+            {
+                distance = sv.min()[otherDir] - position_[otherDir];
+            }
+            else if (position_[otherDir] > sv.max()[otherDir])
+            {
+                distance = position_[otherDir] - sv.max()[otherDir];
+            }
+
+            transverseDistanceSqr += sqr(distance);
+        }
+
+        const scalar axialSpanSqr = radiusSqr - transverseDistanceSqr;
+
+        if (axialSpanSqr <= 0)
+        {
+            return false;
+        }
+
+        const scalar axialSpan = sqrt(axialSpanSqr);
+
+        limitedMin[dir] = max
+        (
+            sv.min()[dir],
+            position_[dir] - axialSpan
+        );
+
+        limitedMax[dir] = min
+        (
+            sv.max()[dir],
+            position_[dir] + axialSpan
+        );
+
+        if ((limitedMax[dir] - limitedMin[dir]) <= VSMALL)
+        {
+            return false;
+        }
+    }
+
+    limBBox = boundBox(limitedMin, limitedMax);
+    return limBBox.volume() > VSMALL;
 }
 //---------------------------------------------------------------------------//
 pointField sphereBody::sampleSurfacePoints()

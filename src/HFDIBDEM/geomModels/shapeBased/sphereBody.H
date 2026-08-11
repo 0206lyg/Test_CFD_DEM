@@ -176,6 +176,19 @@ namespace Foam
 
         bool pointInside(point pointI) final override;
 
+        volumeType getVolumeType
+        (
+            subVolume& sv,
+            bool cIb
+        ) final override;
+
+        bool limitFinalSubVolume
+        (
+            const subVolume& sv,
+            bool cIb,
+            boundBox& limBBox
+        ) final override;
+
         void getClosestPointAndNormal
         (
             const point& startPoint,
