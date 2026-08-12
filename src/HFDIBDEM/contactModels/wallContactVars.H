@@ -67,7 +67,9 @@ class wallContactVars
     
     vector lVector_;    // Vector from contact center to the contact point
 
-    vector FtPrev_;     // Tangential force from previous time-step
+    // Elastic tangential force history; the instantaneous dashpot is not
+    // stored between DEM substeps.
+    vector FtPrev_;
 
     // Constructors ------------------------------------------------
     wallContactVars()
@@ -115,7 +117,9 @@ class wallContactVars
         return physicalProperties_;
     }
 
-    void clear()
+    // Clear quantities recomputed from geometry and kinematics while keeping
+    // FtPrev_, which is the elastic Mindlin history of a continuing contact.
+    void clearContactData()
     {
         contactCenter_ = vector::zero;
         contactVolume_ = 0;
@@ -129,8 +133,13 @@ class wallContactVars
         Vn_ = 0;
         Lc_ = 0;
         curAdhN_ = 0;
+    }
+
+    void clear()
+    {
+        clearContactData();
         FtPrev_ = vector::zero;
-    }    
+    }
 };
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //

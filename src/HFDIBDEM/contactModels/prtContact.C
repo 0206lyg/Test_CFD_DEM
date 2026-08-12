@@ -660,14 +660,9 @@ bool solvePrtContact(
     F += FNd;
     InfoH << parallelDEM_Info << "-- Particle-particle " <<subCInfo.getCPair().first() <<"-"<<subCInfo.getCPair().second() << " contact FN " << F << endl;
 
-    vector Ft = subCInfo.getFt(deltaT);
+    vector Ft = subCInfo.getFt(deltaT, cInfo.getMu()*mag(F));
     InfoH << parallelDEM_Info << "-- Particle-particle " <<subCInfo.getCPair().first() <<"-"<<subCInfo.getCPair().second() << " contact Ft " << Ft << endl;
 
-    if (mag(Ft) > cInfo.getMu() * mag(F))
-    {
-        Ft *= cInfo.getMu() * mag(F) / mag(Ft);
-    }
-    InfoH << parallelDEM_Info << "-- Particle-particle " <<subCInfo.getCPair().first() <<"-"<<subCInfo.getCPair().second() << " contact Ft clamped " << Ft << endl;
     F += Ft;
 
     vector FA = subCInfo.getFA();

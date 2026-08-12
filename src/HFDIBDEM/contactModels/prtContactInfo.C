@@ -106,7 +106,7 @@ prtContactInfo::~prtContactInfo()
 //---------------------------------------------------------------------------//
 std::shared_ptr<prtSubContactInfo> prtContactInfo::matchSubContact
 (
-    boundBox& bbox,
+    boundBox&,
     physicalProperties& physicalProperties,
     Tuple2<label,label>& contactPair
 )
@@ -118,10 +118,11 @@ std::shared_ptr<prtSubContactInfo> prtContactInfo::matchSubContact
             continue;
         }
 
-        if (bbox.contains(sC->getVMInfo()->getStartingPoint()))
-        {
-            return sC;
-        }
+        // A non-cluster arbitrary-shape pair owns exactly one virtual-mesh
+        // subcontact.  Its identity is the particle pair, not the virtual
+        // mesh starting point, which may move outside the next overlap box
+        // while the physical contact remains continuous.
+        return sC;
     }
 
     return std::make_shared<prtSubContactInfo>
@@ -168,8 +169,25 @@ void prtContactInfo::getContacts_Sphere()
         return;
     }
 
-    newContactList_.emplace_back(std::make_shared<prtSubContactInfo>
-        (contactPair_, physicalProperties_)
+    // Preserve tangential history for the duration of a continuous sphere
+    // contact.  A contact that was lost leaves contactList_ empty after the
+    // list swap, so a later re-contact still starts with a fresh history.
+    for (const auto& oldContact : contactList_)
+    {
+        if (!oldContact->getVMInfo())
+        {
+            newContactList_.emplace_back(oldContact);
+            return;
+        }
+    }
+
+    newContactList_.emplace_back
+    (
+        std::make_shared<prtSubContactInfo>
+        (
+            contactPair_,
+            physicalProperties_
+        )
     );
 }
 //---------------------------------------------------------------------------//

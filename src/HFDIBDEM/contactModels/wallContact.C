@@ -117,6 +117,7 @@ bool detectWallContact(
     wallContactInfo& wallCntInfo
 )
 {
+    wallCntInfo.beginContactDetection();
     ibClass.setWallContact(false);
 
     if(ibClass.getGeomModel().getcType() == sphere)
@@ -314,6 +315,10 @@ void getWallContactVars(
     wallSubContactInfo& sWC
 )
 {
+    // Geometry and kinematics are rebuilt every DEM substep.  Preserve only
+    // the elastic tangential history carried by this continuing subcontact.
+    sWC.getWallCntVars().clearContactData();
+
     if (wallCntInfo.getcClass().getGeomModel().getcType() == sphere)
     {
         string finiteWallName;
@@ -777,14 +782,10 @@ bool solveWallContact
     F += FNd;
     InfoH << parallelDEM_Info << "-- Particle-wall body "<< sCI.getBodyId() <<" contact FN " << F << endl;
 
-    vector Ft = sCI.getFt(wallCntVar, deltaT);
+    const scalar maxFt = sCI.getMu(wallCntVar)*mag(F);
+    vector Ft = sCI.getFt(wallCntVar, deltaT, maxFt);
     InfoH << parallelDEM_Info << "-- Particle-wall body "<< sCI.getBodyId() <<" contact Ft " << Ft << endl;
-
-    if (mag(Ft) > sCI.getMu(wallCntVar) * mag(F))
-    {
-        Ft *= sCI.getMu(wallCntVar) * mag(F) / mag(Ft);
-    }
-    InfoH << parallelDEM_Info << "-- Particle-wall body "<< sCI.getBodyId() <<" contact Ft clamped" << Ft << endl;
+    InfoH << parallelDEM_Info << "-- Particle-wall body "<< sCI.getBodyId() <<" contact Ft clamped " << Ft << endl;
     F += Ft;
 
     vector FA = sCI.getFA(wallCntVar);

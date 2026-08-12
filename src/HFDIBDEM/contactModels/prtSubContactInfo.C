@@ -101,45 +101,107 @@ vector prtSubContactInfo::getFNd()
 
 }
 //---------------------------------------------------------------------------//
-vector prtSubContactInfo::getFt(scalar deltaT)
+vector prtSubContactInfo::getFt(scalar deltaT, scalar maxFt)
 {
-    // compute relative tangential velocity
-    vector FtLastP(FtPrev_ - (FtPrev_ & prtCntVars_.contactNormal_)
-        *prtCntVars_.contactNormal_);
+    const scalar normalMag(mag(prtCntVars_.contactNormal_));
 
-    // scale projected Ft to have same magnitude as FtLast
+    if (normalMag <= SMALL || maxFt <= SMALL || deltaT <= 0)
+    {
+        FtPrev_ = vector::zero;
+        return vector::zero;
+    }
 
+    const vector normal(prtCntVars_.contactNormal_/normalMag);
 
-    vector FtLastS(mag(FtPrev_) * (FtLastP/(mag(FtLastP)+SMALL)));
+    // Rotate the elastic history into the current contact plane while
+    // preserving its magnitude.  Reset it if the projection is singular.
+    const scalar FtPrevMag(mag(FtPrev_));
+    const vector FtLastP
+    (
+        FtPrev_
+      - (FtPrev_ & normal)*normal
+    );
+    const scalar FtLastPMag(mag(FtLastP));
+
+    vector FtElastic(vector::zero);
+    if
+    (
+        FtPrevMag > SMALL
+     && FtLastPMag > sqrt(SMALL)*FtPrevMag
+    )
+    {
+        FtElastic = FtLastP*(FtPrevMag/FtLastPMag);
+    }
 
     // compute relative tangential velocity
     const vector relVeli(cVeli_ - tVeli_);
     const vector veliNorm
     (
-        prtCntVars_.contactNormal_
-       *(relVeli & prtCntVars_.contactNormal_)
+        normal*(relVeli & normal)
     );
     const vector Vt(relVeli - veliNorm);
-    // compute tangential force
-        //NewDefinition
+
+    scalar kT(0);
+    scalar dampingT(0);
+
     if(contactModelInfo::getUseMindlinRotationalModel())
     {
-        
-        scalar kT = 200*8*physicalProperties_.aG_*(prtCntVars_.contactArea_/(Lc_+SMALL));
-        vector deltaFt(kT*Vt*deltaT + 2*physicalProperties_.reduceBeta_*sqrt(kT*physicalProperties_.reduceM_)*Vt);
-        FtPrev_ = - FtLastS - deltaFt;
-    }
+        if
+        (
+            physicalProperties_.aG_ > SMALL
+         && prtCntVars_.contactArea_ > SMALL
+         && Lc_ > SMALL
+         && physicalProperties_.reduceM_ > SMALL
+        )
+        {
+            // OpenHFDIB-DEM contact model, Appendix A, Eq. (A.11).
+            kT = 8*physicalProperties_.aG_
+                *(prtCntVars_.contactArea_/Lc_);
 
-    if(contactModelInfo::getUseChenRotationalModel())
+            dampingT = 2*physicalProperties_.reduceBeta_
+                *sqrt(kT*physicalProperties_.reduceM_);
+        }
+    }
+    else if(contactModelInfo::getUseChenRotationalModel())
     {
-        
-        vector Ftdi(- physicalProperties_.reduceBeta_*sqrt(physicalProperties_.aG_*physicalProperties_.reduceM_*Lc_)*Vt);
-        Ftdi += physicalProperties_.aG_*Lc_*Vt*deltaT;
-        FtPrev_ = - FtLastS- Ftdi;
+        if
+        (
+            physicalProperties_.aG_ > SMALL
+         && Lc_ > SMALL
+         && physicalProperties_.reduceM_ > SMALL
+        )
+        {
+            // Retain the Chen stiffness and damping magnitudes while using
+            // the same elastic-history convention as the Mindlin path.
+            kT = physicalProperties_.aG_*Lc_;
+            dampingT = physicalProperties_.reduceBeta_
+                *sqrt(kT*physicalProperties_.reduceM_);
+        }
     }
 
-    
-    return FtPrev_;
+    if (kT <= SMALL)
+    {
+        FtPrev_ = vector::zero;
+        return vector::zero;
+    }
+
+    // Only the elastic increment is accumulated.  Damping is instantaneous.
+    vector FtElasticTrial(FtElastic - kT*Vt*deltaT);
+    const vector FtDamping(-dampingT*Vt);
+    vector Ft(FtElasticTrial + FtDamping);
+
+    // Apply the Coulomb slider to the total trial force and back-correct the
+    // elastic state so no force above the limit remains hidden in history.
+    const scalar frictionLimit(maxFt);
+    const scalar FtMag(mag(Ft));
+    if (FtMag > frictionLimit && FtMag > SMALL)
+    {
+        Ft *= frictionLimit/FtMag;
+        FtElasticTrial = Ft - FtDamping;
+    }
+
+    FtPrev_ = FtElasticTrial;
+    return Ft;
 }
 //---------------------------------------------------------------------------//
 void prtSubContactInfo::setVMInfo(boundBox& bBox, scalar subVolumeV)

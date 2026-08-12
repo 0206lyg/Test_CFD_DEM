@@ -169,7 +169,12 @@ class wallSubContactInfo
 
     vector getFNd(wallContactVars& wallCntvar);
 
-    vector getFt(wallContactVars& wallCntvar, scalar deltaT);
+    vector getFt
+    (
+        wallContactVars& wallCntvar,
+        scalar deltaT,
+        scalar maxFt
+    );
 
     forces& getOutForce()
     {

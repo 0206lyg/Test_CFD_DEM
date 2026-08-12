@@ -88,7 +88,9 @@ class prtSubContactInfo
 
     Tuple2<forces,forces> outForce_; // Out variable for force
 
-    vector FtPrev_ = vector::zero;     // Tangential force from previous time-step
+    // Elastic tangential force history.  The instantaneous dashpot force is
+    // deliberately not stored here.
+    vector FtPrev_ = vector::zero;
 
     bool contactResolved_ = false;
 
@@ -144,7 +146,7 @@ class prtSubContactInfo
 
     vector getFNd();
 
-    vector getFt(scalar deltaT);
+    vector getFt(scalar deltaT, scalar maxFt);
 
     Tuple2<forces,forces>& getOutForce()
     {

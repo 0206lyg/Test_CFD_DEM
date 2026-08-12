@@ -586,40 +586,116 @@ vector wallSubContactInfo::getFNd(wallContactVars& wallCntvar)
 
 }
 //---------------------------------------------------------------------------//
-vector wallSubContactInfo::getFt(wallContactVars& wallCntvar, scalar deltaT)
+vector wallSubContactInfo::getFt
+(
+    wallContactVars& wallCntvar,
+    scalar deltaT,
+    scalar maxFt
+)
 {
     physicalProperties& meanCntPar(wallCntvar.getMeanCntPar());
-    // project last Ft into a new direction
-    vector FtLastP(wallCntvar.FtPrev_
-        - (wallCntvar.FtPrev_ & wallCntvar.contactNormal_)
-        *wallCntvar.contactNormal_);
-    // scale projected Ft to have same magnitude as FtLast
-    vector FtLastS(mag(wallCntvar.FtPrev_) * (FtLastP/(mag(FtLastP)+SMALL)));
-    // Orthogonal projection of relative velocity onto the wall normal.
-    const vector relativeVelocityNorm =
-        wallCntvar.contactNormal_
-       *(wallCntvar.relativeVelocity_ & wallCntvar.contactNormal_);
 
-    const vector Vt =
-        wallCntvar.relativeVelocity_ - relativeVelocityNorm;
-    // compute tangential force
+    const scalar normalMag = mag(wallCntvar.contactNormal_);
+
+    if (normalMag <= SMALL || maxFt <= SMALL || deltaT <= 0)
+    {
+        wallCntvar.FtPrev_ = vector::zero;
+        return vector::zero;
+    }
+
+    const vector normal(wallCntvar.contactNormal_/normalMag);
+
+    // Rotate the preceding elastic force into the current tangent plane.  Its
+    // magnitude is preserved unless the old and new planes are orthogonal.
+    vector FtElasticRot(vector::zero);
+    const scalar FtElasticOldMag = mag(wallCntvar.FtPrev_);
+
+    if (FtElasticOldMag > SMALL)
+    {
+        const vector FtElasticProjected
+        (
+            wallCntvar.FtPrev_
+          - (wallCntvar.FtPrev_ & normal)*normal
+        );
+
+        const scalar FtElasticProjectedMag = mag(FtElasticProjected);
+
+        if (FtElasticProjectedMag > sqrt(SMALL)*FtElasticOldMag)
+        {
+            FtElasticRot =
+                FtElasticProjected
+               *(FtElasticOldMag/FtElasticProjectedMag);
+        }
+    }
+
+    const vector Vt
+    (
+        wallCntvar.relativeVelocity_
+      - normal*(wallCntvar.relativeVelocity_ & normal)
+    );
+
+    scalar kT = 0;
+    scalar dampingCoeff = 0;
+
     if(contactModelInfo::getUseMindlinRotationalModel())
     {
-        
-        scalar kT = 200*8*meanCntPar.aG_*(wallCntvar.contactArea_/(wallCntvar.Lc_+SMALL));
-        vector deltaFt(kT*Vt*deltaT + 2*meanCntPar.reduceBeta_*sqrt(kT*reduceM_)*Vt);
-        wallCntvar.FtPrev_ = - FtLastS - deltaFt;
-    }
+        if
+        (
+            meanCntPar.aG_ > SMALL
+         && wallCntvar.contactArea_ > SMALL
+         && wallCntvar.Lc_ > SMALL
+         && reduceM_ > SMALL
+        )
+        {
+            // OpenHFDIB-DEM contact model, Appendix A, Eq. (A.11).
+            kT =
+                8*meanCntPar.aG_
+               *(wallCntvar.contactArea_/wallCntvar.Lc_);
 
-    if(contactModelInfo::getUseChenRotationalModel())
+            dampingCoeff =
+                2*meanCntPar.reduceBeta_*sqrt(kT*reduceM_);
+        }
+    }
+    else if(contactModelInfo::getUseChenRotationalModel())
     {
-   
-        vector Ftdi(meanCntPar.reduceBeta_*sqrt(meanCntPar.aG_*reduceM_*wallCntvar.Lc_)*Vt);
-        Ftdi += meanCntPar.aG_*wallCntvar.Lc_*Vt*deltaT;
-        wallCntvar.FtPrev_ = - FtLastS - Ftdi;
+        if
+        (
+            meanCntPar.aG_ > SMALL
+         && wallCntvar.Lc_ > SMALL
+         && reduceM_ > SMALL
+        )
+        {
+            kT = meanCntPar.aG_*wallCntvar.Lc_;
+            dampingCoeff =
+                meanCntPar.reduceBeta_*sqrt(kT*reduceM_);
+        }
     }
 
-    return wallCntvar.FtPrev_;
+    if (kT <= SMALL)
+    {
+        wallCntvar.FtPrev_ = vector::zero;
+        return vector::zero;
+    }
+
+    // FtPrev_ stores only the elastic spring state.  The dashpot is
+    // instantaneous and must not be integrated into the next DEM substep.
+    const vector FtElasticTrial(FtElasticRot - kT*Vt*deltaT);
+    const vector FtDamping(-dampingCoeff*Vt);
+    const vector FtTrial(FtElasticTrial + FtDamping);
+    const scalar FtTrialMag = mag(FtTrial);
+
+    if (FtTrialMag > maxFt && FtTrialMag > SMALL)
+    {
+        const vector Ft(FtTrial*(maxFt/FtTrialMag));
+
+        // Return mapping onto the Coulomb surface: back-correct the spring
+        // state so spring plus the current dashpot equals the capped force.
+        wallCntvar.FtPrev_ = Ft - FtDamping;
+        return Ft;
+    }
+
+    wallCntvar.FtPrev_ = FtElasticTrial;
+    return FtTrial;
 }
 //---------------------------------------------------------------------------//
 void wallSubContactInfo::syncData()

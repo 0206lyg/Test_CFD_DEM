@@ -75,6 +75,42 @@ bool finiteWallPatchActiveWCInfo(const string& wallName)
     );
 }
 
+bool sameWallPatchSetWCInfo
+(
+    const List<string>& first,
+    const List<string>& second
+)
+{
+    if (first.size() != second.size())
+    {
+        return false;
+    }
+
+    List<bool> secondMatched(second.size(), false);
+
+    forAll(first, firstI)
+    {
+        bool found(false);
+
+        forAll(second, secondI)
+        {
+            if (!secondMatched[secondI] && first[firstI] == second[secondI])
+            {
+                secondMatched[secondI] = true;
+                found = true;
+                break;
+            }
+        }
+
+        if (!found)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 label wallNormalDirectionWCInfo(const string& wallName)
 {
     const vector& nVec = wallPlaneInfo::getWallPlaneInfo()[wallName][0];
@@ -824,9 +860,6 @@ bool wallContactInfo::detectWallContact(
     const HashTable<List<vector>,string,Hash<string>>& wallPatches
 )
 {
-    contactPatches_.clear();
-    clearOldContact();
-
     boundBox bodyBB = ibContactClass_.getGeomModel().getBounds();
     pointField bBpoints = bodyBB.points();
 
@@ -915,6 +948,117 @@ bool wallContactInfo::detectWallContact(
 
     return bBContact;
 
+}
+//---------------------------------------------------------------------------//
+void wallContactInfo::beginContactDetection()
+{
+    contactPatches_.clear();
+
+    // Only the immediately preceding resolved subcontacts may seed the new
+    // contact geometry.  Any older, unmatched contacts represent a true loss
+    // of contact and are discarded here.
+    oldContactHistory_.clear();
+    oldContactHistory_.reserve(subCList_.size());
+
+    for (const std::shared_ptr<wallSubContactInfo>& contact : subCList_)
+    {
+        oldContactHistory_.emplace_back
+        (
+            contact->getContactPatches(),
+            contact->getsWCBB(),
+            contact->getWallCntVars().FtPrev_
+        );
+    }
+
+    subCList_.clear();
+}
+//---------------------------------------------------------------------------//
+void wallContactInfo::restoreTangentialHistory()
+{
+    List<bool> oldMatched(oldContactHistory_.size(), false);
+    const scalar matchTolerance
+    (
+        virtualMeshLevel::getCharCellSize()
+       /virtualMeshLevel::getLevelOfDivision()
+    );
+    const vector matchPadding
+    (
+        matchTolerance,
+        matchTolerance,
+        matchTolerance
+    );
+
+    for (std::shared_ptr<wallSubContactInfo>& current : subCList_)
+    {
+        label bestOld = -1;
+        scalar bestDistanceSqr = GREAT;
+
+        for (label oldI = 0; oldI < label(oldContactHistory_.size()); oldI++)
+        {
+            if (oldMatched[oldI])
+            {
+                continue;
+            }
+
+            const wallContactHistory& old = oldContactHistory_[oldI];
+            boundBox oldMatchBB(old.BB_);
+            oldMatchBB.min() -= matchPadding;
+            oldMatchBB.max() += matchPadding;
+
+            if
+            (
+                !sameWallPatchSetWCInfo
+                (
+                    current->getContactPatches(),
+                    old.contactPatches_
+                )
+             || !current->getsWCBB().overlaps(oldMatchBB)
+            )
+            {
+                continue;
+            }
+
+            const scalar distanceSqr = magSqr
+            (
+                current->getsWCBB().midpoint()
+              - old.BB_.midpoint()
+            );
+
+            if (distanceSqr < bestDistanceSqr)
+            {
+                bestDistanceSqr = distanceSqr;
+                bestOld = oldI;
+            }
+        }
+
+        if (bestOld >= 0)
+        {
+            current->getWallCntVars().FtPrev_ =
+                oldContactHistory_[bestOld].FtElastic_;
+
+            oldMatched[bestOld] = true;
+        }
+    }
+
+    oldContactHistory_.clear();
+}
+//---------------------------------------------------------------------------//
+void wallContactInfo::clearUnresolvedContacts()
+{
+    oldContactHistory_.clear();
+
+    std::vector<std::shared_ptr<wallSubContactInfo>> resolvedContacts;
+    resolvedContacts.reserve(subCList_.size());
+
+    for (const std::shared_ptr<wallSubContactInfo>& contact : subCList_)
+    {
+        if (contact->getContactResolved())
+        {
+            resolvedContacts.push_back(contact);
+        }
+    }
+
+    subCList_.swap(resolvedContacts);
 }
 //---------------------------------------------------------------------------//
 void wallContactInfo::findContactAreas()
@@ -1607,6 +1751,7 @@ boundBox wallContactInfo::correctSMBBforWall
 void wallContactInfo::clearOldContact()
 {
     subCList_.clear();
+    oldContactHistory_.clear();
 }
 //---------------------------------------------------------------------------//
 void wallContactInfo::setNewSubContact(

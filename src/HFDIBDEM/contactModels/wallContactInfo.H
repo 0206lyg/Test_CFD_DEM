@@ -84,6 +84,30 @@ class wallContactInfo
 
     std::vector<std::shared_ptr<wallSubContactInfo>> subCList_;
 
+    struct wallContactHistory
+    {
+        List<string> contactPatches_;
+        boundBox BB_;
+        vector FtElastic_;
+
+        wallContactHistory
+        (
+            const List<string>& contactPatches,
+            const boundBox& BB,
+            const vector& FtElastic
+        )
+        :
+            contactPatches_(contactPatches),
+            BB_(BB),
+            FtElastic_(FtElastic)
+        {}
+    };
+
+    // Lightweight snapshots from the preceding DEM substep.  Retaining only
+    // the match key and elastic force avoids keeping the old virtual meshes in
+    // memory while the current contact geometry is rebuilt.
+    std::vector<wallContactHistory> oldContactHistory_;
+
     scalar reduceM_;    // Reduced mass
 
     forces outForce_; // Out variable for force
@@ -143,6 +167,17 @@ class wallContactInfo
     bool detectWallContact(
         const HashTable<List<vector>,string,Hash<string>>& wallPatches = wallPlaneInfo::getWallPlaneInfo()
     );
+
+    // Start a new wall-contact detection pass while retaining the preceding
+    // subcontacts temporarily for one-to-one tangential-history matching.
+    void beginContactDetection();
+
+    // Transfer elastic tangential histories between geometrically continuous
+    // wall subcontacts (same patch set and overlapping contact bounds).
+    void restoreTangentialHistory();
+
+    // Keep only contacts that produced a valid force in this DEM substep.
+    void clearUnresolvedContacts();
 
     void findContactAreas();
 
