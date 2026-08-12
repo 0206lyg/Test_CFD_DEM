@@ -1704,6 +1704,13 @@ void openHFDIBDEM::updateDEM(volScalarField& body,volScalarField& refineF)
                         wallContactIBTable.insert(bodyId,wallContactIB.size()-1);
                         // cIb.getWallCntInfo().registerSubContactList(wallContactList);
                     }
+                    else
+                    {
+                        // Broad-phase contact was lost.  Drop the archived
+                        // elastic state immediately so a later re-contact
+                        // starts with a fresh tangential spring.
+                        cIb.getWallCntInfo().clearOldContact();
+                    }
                 }
             }
         }
@@ -1712,16 +1719,23 @@ void openHFDIBDEM::updateDEM(volScalarField& body,volScalarField& refineF)
 
         if(wallContactIB.size() > 0)
         {
-            label wallContactPerProc(ceil(double(wallContactIB.size())/Pstream::nProcs()));
-            // Info <<" wallContactPerProc : "<< wallContactPerProc << endl;
-            if( wallContactIB.size() <= Pstream::nProcs())
+            forAll(wallContactIB, wallContactI)
             {
-                wallContactPerProc = 1;
-            }
-            for(int assignProc = Pstream::myProcNo()*wallContactPerProc; assignProc < min((Pstream::myProcNo()+1)*wallContactPerProc,wallContactIB.size()); assignProc++)
-            {
-                immersedBody& cIb(immersedBodies_[wallContactIB[assignProc]]);
+                immersedBody& cIb(immersedBodies_[wallContactIB[wallContactI]]);
+
+                // Keep a wall contact on the same rank from one DEM substep
+                // to the next so its local elastic tangential history remains
+                // valid without an additional MPI synchronization.
+                const label ownerProc =
+                    cIb.getBodyId() % Pstream::nProcs();
+
+                if (Pstream::myProcNo() != ownerProc)
+                {
+                    continue;
+                }
+
                 cIb.getWallCntInfo().findContactAreas();
+                cIb.getWallCntInfo().restoreTangentialHistory();
 
                 DynamicList<wallSubContactInfo*> wallContactList;
                 cIb.getWallCntInfo().registerSubContactList(wallContactList);
@@ -1736,10 +1750,10 @@ void openHFDIBDEM::updateDEM(volScalarField& body,volScalarField& refineF)
                         cIb.getWallCntInfo(),
                         deltaTime*step,
                         *sCW
-                        ));
+                    ));
 
                     sCW->setResolvedContact(resolved);
-                    wallContactResolvedList[assignProc] += resolved;
+                    wallContactResolvedList[wallContactI] += resolved;
                     wallcRList[sC] = resolved;
 
                     if (resolved && sCW->getContactPatches().size() == 1)
@@ -1803,7 +1817,7 @@ void openHFDIBDEM::updateDEM(volScalarField& body,volScalarField& refineF)
                 cF.T = iBodyOutTorqueList[iB];
 
                 cIb.updateContactForces(cF);
-                cIb.getWallCntInfo().clearOldContact();
+                cIb.getWallCntInfo().clearUnresolvedContacts();
             }
         }
 
@@ -1858,19 +1872,27 @@ void openHFDIBDEM::updateDEM(volScalarField& body,volScalarField& refineF)
 
         if(contactList.size() > 0 )
         {
-            label contactPerProc(ceil(double(contactList.size())/Pstream::nProcs()));
-            if( contactList.size() <= Pstream::nProcs())
+            forAll(contactList, contactI)
             {
-                contactPerProc = 1;
-            }
-
-            for(int assignProc = Pstream::myProcNo()*contactPerProc; assignProc < min((Pstream::myProcNo()+1)*contactPerProc,contactList.size()); assignProc++)
-            {
-                prtSubContactInfo* sCI = contactList[assignProc];
+                prtSubContactInfo* sCI = contactList[contactI];
                 const Tuple2<label, label>& cPair = sCI->getCPair();
 
-                contactResolvedcKey[assignProc] = cPair.first();
-                contactResolvedtKey[assignProc] = cPair.second();
+                // Hash the stable particle pair instead of partitioning the
+                // changing flattened contact list.  All subcontacts of a pair
+                // remain on one rank, preserving their local Ft histories.
+                const unsigned pairHash =
+                    Hash<Tuple2<label, label>>()(cPair);
+
+                const label ownerProc =
+                    pairHash % unsigned(Pstream::nProcs());
+
+                if (Pstream::myProcNo() != ownerProc)
+                {
+                    continue;
+                }
+
+                contactResolvedcKey[contactI] = cPair.first();
+                contactResolvedtKey[contactI] = cPair.second();
 
                 ibContactClass& cClass(immersedBodies_[cPair.first()].getibContactClass());
                 ibContactClass& tClass(immersedBodies_[cPair.second()].getibContactClass());
@@ -1883,7 +1905,7 @@ void openHFDIBDEM::updateDEM(volScalarField& body,volScalarField& refineF)
                     bool resolved(solvePrtContact(mesh_, prtcInfo, *sCI, deltaTime*step));
                     sCI->setResolvedContact(resolved);
 
-                    contactResolved[assignProc] += resolved;
+                    contactResolved[contactI] += resolved;
                 }
             }
         }
