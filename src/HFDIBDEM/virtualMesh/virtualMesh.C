@@ -423,12 +423,13 @@ Tuple2<scalar,vector> virtualMesh::get3DcontactNormalAndSurface(DynamicPointList
             weightZ = -weightZ;
         weightedDir += axisDirZ * weightZ;
 
-        if(mag(weightedDir) > SMALL)
+        const scalar weightedMag(mag(weightedDir));
+        if(weightedMag > SMALL)
         {
             normOk = true;
-            normalVec = weightedDir/(mag(weightedDir)+SMALL);
+            normalVec = weightedDir/weightedMag;
         }
-        if (!normOk || mag(normalVec) < 1)
+        if (!normOk)
             normalVec = normalVector;
 
         // create best fitting plane
@@ -468,6 +469,7 @@ Tuple2<scalar,vector> virtualMesh::get3DcontactNormalAndSurface(DynamicPointList
             //~ for (scalar j = 0.0; j < 5.0; j += 1.0)
             for (scalar j = 0.0; j < 15.0; j += 1.0)
             {
+                pointsInSection.clear();
                 plane uPlane(contactCenter_, u*(helpList[i] + uStep*j/15.0) + v*(helpList[i + 1] + vStep*j/15.0));
                 plane vPlane(contactCenter_, u*(helpList[i] + uStep*(j+1)/15.0) + v*(helpList[i + 1] + vStep*(j+1)/15.0));
 
@@ -479,20 +481,33 @@ Tuple2<scalar,vector> virtualMesh::get3DcontactNormalAndSurface(DynamicPointList
                     }
                 }
 
-                if (pointsInSection.size() > SMALL)
+                if (pointsInSection.size() > 0)
                 {
-                    vector max(vector::zero);
-                    scalar distance(0);
-                    forAll (pointsInSection, pointI)
+                    point farthestPoint(pointsInSection[0]);
+                    scalar maxDistanceSqr
+                    (
+                        magSqr(farthestPoint - contactCenter_)
+                    );
+
+                    for
+                    (
+                        label pointI = 1;
+                        pointI < pointsInSection.size();
+                        ++pointI
+                    )
                     {
-                         scalar magnitude = mag(pointsInSection[pointI]-contactCenter_);
-                         if (magnitude > distance)
-                         {
-							 magnitude = distance;
-							 max = pointsInSection[pointI];
-						 }
-					}
-                    commCellsInSections.append(max);
+                        const scalar distanceSqr = magSqr
+                        (
+                            pointsInSection[pointI] - contactCenter_
+                        );
+
+                        if (distanceSqr > maxDistanceSqr)
+                        {
+                            maxDistanceSqr = distanceSqr;
+                            farthestPoint = pointsInSection[pointI];
+                        }
+                    }
+                    commCellsInSections.append(farthestPoint);
                 }
             }
         }
