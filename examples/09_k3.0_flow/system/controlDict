@@ -1,0 +1,67 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| =========                 |                                                 |
+| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
+|  \\    /   O peration     | Version:  8                                     |
+|   \\  /    A nd           | Web:      www.OpenFOAM.org                      |
+|    \\/     M anipulation  |                                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      controlDict;
+}
+
+application      pimpleLYJHFDIBFoam;
+
+// A clean run starts at 0; a retained case resumes from its latest time.
+startFrom        latestTime;
+startTime        0;
+
+stopAt           endTime;
+endTime          30.0;
+
+deltaT           1e-3;
+adjustTimeStep   yes;
+
+writeControl     adjustableRunTime;
+writeInterval    0.05;
+
+purgeWrite       0;
+writeFormat      ascii;
+writePrecision   8;
+writeCompression uncompressed;
+
+timeFormat       general;
+timePrecision    8;
+
+maxCo            0.7;
+maxDeltaT        1e-3;
+
+runTimeModifiable yes;
+
+functions
+{
+    // bottomOutlet has p = 0, so the upstream area-average gauge pressure is
+    // exactly the inlet-to-outlet pressure drop.  Pressure is kinematic in
+    // OpenFOAM; scaleFactor=rho converts it to Pa.
+    pressureDrop
+    {
+        type            surfaceFieldValue;
+        libs            ("libfieldFunctionObjects.so");
+
+        writeControl    timeStep;
+        writeInterval   10;
+
+        regionType      patch;
+        name            topOpen;
+        operation       areaAverage;
+        fields          (p);
+        scaleFactor     1000;
+        writeFields     false;
+    }
+}
+
+// ************************************************************************* //
