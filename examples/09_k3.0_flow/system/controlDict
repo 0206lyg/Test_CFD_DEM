@@ -21,13 +21,13 @@ startFrom        latestTime;
 startTime        0;
 
 stopAt           endTime;
-endTime          30.0;
+endTime          15.0;
 
 deltaT           1e-3;
 adjustTimeStep   yes;
 
 writeControl     adjustableRunTime;
-writeInterval    0.05;
+writeInterval    0.15;
 
 purgeWrite       0;
 writeFormat      ascii;

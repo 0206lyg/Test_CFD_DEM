@@ -23,8 +23,8 @@ interpolationSchemes
 
 surfaceThreshold    1e-4;
 
-// Maximum DEM substep = stepDEM * maxDeltaT = 0.01 * 1e-3 = 1e-5 s.
-stepDEM              0.01;
+// Maximum DEM substep = stepDEM * maxDeltaT = 0.002 * 1e-3 = 2e-6 s.
+stepDEM              0.002;
 geometricD           (1 1 1);
 recordSimulation     true;
 recordFirstTimeStep  true;
@@ -223,6 +223,8 @@ virtualMesh
 
 PH_SC_prefill
 {
+    stlBaseName PH_SC;
+
     fullyCoupledBody
     {
         velocity (0 -0.005 0);
@@ -259,7 +261,13 @@ PH_SC_prefill
                 maxBound ( 0.020 0.075  0.020);
             }
 
-            scalingMode noScaling;
+            scalingMode randomScaling;
+            randomScalingCoeffs
+            {
+                minScale 0.98521235637496851;
+                maxScale 0.98521235637496851;
+            }
+
             noScalingCoeffs
             {
             }
@@ -268,11 +276,20 @@ PH_SC_prefill
             uniformRandomRotationCoeffs
             {
             }
+
+            noRotationCoeffs
+            {
+            }
         }
     }
 
     material         particle;
     bodyGeom         convex;
+    sphere
+    {
+        startPosition (0 0.050 0);
+        radius        0.001691682667074;
+    }
     updateTorque     true;
     sdBasedLambda    false;
     interfaceSpan    1.0;
@@ -283,6 +300,8 @@ PH_SC_prefill
 
 PH_SC_inlet
 {
+    stlBaseName PH_SC;
+
     fullyCoupledBody
     {
         velocity (0 -0.005 0);
@@ -318,7 +337,13 @@ PH_SC_inlet
                 maxBound ( 0.020 0.075  0.020);
             }
 
-            scalingMode noScaling;
+            scalingMode randomScaling;
+            randomScalingCoeffs
+            {
+                minScale 0.98521235637496851;
+                maxScale 0.98521235637496851;
+            }
+
             noScalingCoeffs
             {
             }
@@ -327,11 +352,20 @@ PH_SC_inlet
             uniformRandomRotationCoeffs
             {
             }
+
+            noRotationCoeffs
+            {
+            }
         }
     }
 
     material         particle;
     bodyGeom         convex;
+    sphere
+    {
+        startPosition (0 0.070 0);
+        radius        0.001691682667074;
+    }
     updateTorque     true;
     sdBasedLambda    false;
     interfaceSpan    1.0;

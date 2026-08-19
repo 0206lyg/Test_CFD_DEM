@@ -16,6 +16,14 @@ FoamFile
 
 solvers
 {
+    Phi
+    {
+        solver          GAMG;
+        smoother        DIC;
+        tolerance       1e-6;
+        relTol          0.01;
+    }
+
     p
     {
         solver                  GAMG;
@@ -53,6 +61,11 @@ solvers
         tolerance       1e-9;
         relTol          0;
     }
+}
+
+potentialFlow
+{
+    nNonOrthogonalCorrectors 3;
 }
 
 PISO
