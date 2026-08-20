@@ -15,6 +15,14 @@ FoamFile
 
 convertToMeters 0.01;
 
+// Cell counts for the four block lengths used by this mesh.  The defaults
+// reproduce the original uniform 1.0 mm mesh; the submission script may
+// override these entries before blockMesh is run.
+n10 10;
+n15 15;
+n25 25;
+n50 50;
+
 vertices
 (
     // 10 mm x 10 mm downstream throat, y = 0--25 mm.
@@ -69,32 +77,31 @@ vertices
 
 blocks
 (
-    // Throat: 10 x 25 x 10 = 2,500 cells.
+    // Throat: 10 mm x 25 mm x 10 mm.
     hex (0 1 2 3 4 5 6 7)
-        (10 25 10) simpleGrading (1 1 1)
+        ($n10 $n25 $n10) simpleGrading (1 1 1)
 
-    // Reservoir: (15 + 10 + 15) x 50 x (15 + 10 + 15)
-    // = 80,000 cells.
+    // Reservoir: (15 + 10 + 15) mm x 50 mm x (15 + 10 + 15) mm.
     hex (8 9 21 20 12 3 25 24)
-        (15 50 15) simpleGrading (1 1 1)
+        ($n15 $n50 $n15) simpleGrading (1 1 1)
     hex (9 10 22 21 3 2 26 25)
-        (10 50 15) simpleGrading (1 1 1)
+        ($n10 $n50 $n15) simpleGrading (1 1 1)
     hex (10 11 23 22 2 13 27 26)
-        (15 50 15) simpleGrading (1 1 1)
+        ($n15 $n50 $n15) simpleGrading (1 1 1)
 
     hex (12 3 25 24 14 7 29 28)
-        (15 50 10) simpleGrading (1 1 1)
+        ($n15 $n50 $n10) simpleGrading (1 1 1)
     hex (3 2 26 25 7 6 30 29)
-        (10 50 10) simpleGrading (1 1 1)
+        ($n10 $n50 $n10) simpleGrading (1 1 1)
     hex (2 13 27 26 6 15 31 30)
-        (15 50 10) simpleGrading (1 1 1)
+        ($n15 $n50 $n10) simpleGrading (1 1 1)
 
     hex (14 7 29 28 16 17 33 32)
-        (15 50 15) simpleGrading (1 1 1)
+        ($n15 $n50 $n15) simpleGrading (1 1 1)
     hex (7 6 30 29 17 18 34 33)
-        (10 50 15) simpleGrading (1 1 1)
+        ($n10 $n50 $n15) simpleGrading (1 1 1)
     hex (6 15 31 30 18 19 35 34)
-        (15 50 15) simpleGrading (1 1 1)
+        ($n15 $n50 $n15) simpleGrading (1 1 1)
 );
 
 edges
@@ -207,4 +214,3 @@ mergePatchPairs
 );
 
 // ************************************************************************* //
-
