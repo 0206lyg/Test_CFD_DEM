@@ -60,6 +60,32 @@ stlPath_(stlPath)
     triSurfSearch_.set(new triSurfaceSearch(triSurf_()));
 }
 //---------------------------------------------------------------------------//
+scalar stlBased::geometricVolume() const
+{
+    const triSurface& surface = triSurf_();
+    const pointField& points = surface.points();
+
+    if (points.empty())
+    {
+        return 0.0;
+    }
+
+    const point referencePoint = points[0];
+    scalar signedVolume = 0.0;
+
+    forAll(surface, faceI)
+    {
+        const triSurface::FaceType& face = surface[faceI];
+        const vector p0 = points[face[0]] - referencePoint;
+        const vector p1 = points[face[1]] - referencePoint;
+        const vector p2 = points[face[2]] - referencePoint;
+
+        signedVolume += (p0 & (p1 ^ p2))/6.0;
+    }
+
+    return mag(signedVolume);
+}
+//---------------------------------------------------------------------------//
 vector stlBased::addModelReturnRandomPosition
 (
     const bool allActiveCellsInMesh,
