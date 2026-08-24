@@ -112,6 +112,7 @@ class addModelRepeatRandomPosition
 	bool		timeBased_;
 	bool		fieldBased_;
 	scalar		fieldCurrentValue_;
+    scalar      startAfterTime_;
 
     List<DynamicLabelList>  cellsInBoundBox_;
     List<pointField>        cellZonePoints_;

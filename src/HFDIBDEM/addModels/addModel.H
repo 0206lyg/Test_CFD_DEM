@@ -145,6 +145,41 @@ class addModel
     // Note: this has to return true if addBody ends with SUCCESS,
     //       return false otherwise
 
+    virtual label maxConsecutiveFailures() const
+    {
+        return 1000;
+    }
+
+    virtual label maxTotalAttempts() const
+    {
+        return -1;
+    }
+
+    virtual bool strictCompletion() const
+    {
+        return false;
+    }
+
+    virtual bool targetReached() const
+    {
+        return true;
+    }
+
+    virtual void bodyRegistered
+    (
+        const word&,
+        const volScalarField&
+    )
+    {}
+
+    virtual void reportAdditionSummary
+    (
+        const word&,
+        const volScalarField&,
+        const word&
+    )
+    {}
+
     virtual void recreateBoundBox()
     {
         InfoH << addModel_Info << "-- addModelMessage-- "

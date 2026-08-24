@@ -110,8 +110,59 @@ class addModelOnceScatter
 	bool		polygonPrismActive_;
 	Field<label>octreeField_;
 	bool		multiBody_;
-	bool		fieldBased_;
+    bool		fieldBased_;
+	bool		geometricVolumeBased_;
 	scalar		fieldCurrentValue_;
+
+    // Exact-volume, hybrid-lattice/fast-RSA state.  This is kept in the
+    // onceScatter model so all once-only placement modes remain together.
+    scalar      targetGeometricFraction_;
+    scalar      regionVolume_;
+    scalar      particleVolume_;
+    scalar      fixedScale_;
+    scalar      clearanceScale_;
+    label       targetBodyCount_;
+    label       acceptedBodyCount_;
+    label       totalPackingAttempts_;
+    label       attemptsSinceSuccess_;
+    label       lastSuccessfulAttemptSpan_;
+    label       maxConsecutiveFailures_;
+    label       maxTotalAttempts_;
+    label       reportEveryAccepted_;
+
+    word        packingStrategy_;
+    vector      latticeCellSize_;
+    vector      latticeOrigin_;
+    label       nLatticeCellsX_;
+    label       nLatticeCellsY_;
+    label       nLatticeCellsZ_;
+    label       latticeCapacity_;
+    label       latticeFallbackCount_;
+    labelList   latticeSiteOrder_;
+
+    bool        uniformRandomRotation_;
+    bool        packingIsSphere_;
+    bool        pendingPackingBody_;
+
+    pointField  sourcePoints_;
+    vector      sourceCentre_;
+    scalar      sourceSphereRadius_;
+    scalar      packingRadius_;
+    scalar      packingBinSize_;
+    label       nPackingBinsX_;
+    label       nPackingBinsY_;
+    label       nPackingBinsZ_;
+
+    DynamicList<pointField> acceptedPackingPoints_;
+    DynamicList<boundBox>   acceptedPackingBounds_;
+    DynamicList<vector>     acceptedPackingCentres_;
+    DynamicList<scalar>     acceptedPackingRadii_;
+    HashTable<DynamicLabelList, label, Hash<label>> packingBins_;
+
+    pointField  pendingPackingPoints_;
+    boundBox    pendingPackingBounds_;
+    vector      pendingPackingCentre_;
+    scalar      pendingPackingRadius_;
 
     List<DynamicLabelList>  cellsInBoundBox_;
     List<pointField>        cellZonePoints_;
@@ -128,6 +179,76 @@ class addModelOnceScatter
     pointField relativeBodySupportPoints
     (
         scalar& isotropicRadius
+    );
+
+    // Exact-volume packing helpers --------------------------------
+    void initializeGeometricVolumePacking();
+
+    void initializeHybridLattice();
+
+    std::shared_ptr<geomModel> addGeometricVolumeBody
+    (
+        PtrList<immersedBody>& immersedBodies
+    );
+
+    scalar packingRandom01();
+
+    tensor randomPackingRotation();
+
+    tensor axisAngleRotation(const scalar angle, const vector& axis) const;
+
+    void createPackingCandidate
+    (
+        pointField& actualPoints,
+        pointField& collisionPoints,
+        vector& centre,
+        scalar& radius,
+        boundBox& collisionBounds
+    );
+
+    void createLatticeCandidate
+    (
+        const label siteIndex,
+        const bool randomOrientation,
+        pointField& actualPoints,
+        pointField& collisionPoints,
+        vector& centre,
+        scalar& radius,
+        boundBox& collisionBounds,
+        bool& fitsReservedCell
+    );
+
+    boundBox latticeCellBounds(const label siteIndex) const;
+
+    bool packingCandidateInContact
+    (
+        const pointField& points,
+        const vector& centre,
+        const scalar radius,
+        const boundBox& bounds
+    ) const;
+
+    label packingBinKey(const vector& centre) const;
+
+    void addPendingBodyToPackingBins();
+
+    static vector minkowskiSupport
+    (
+        const pointField& first,
+        const pointField& second,
+        const vector& direction
+    );
+
+    static bool sameDirection(const vector& first, const vector& second);
+
+    static bool updateSimplex(DynamicList<vector>& simplex, vector& direction);
+
+    static bool convexBodiesIntersect
+    (
+        const pointField& first,
+        const pointField& second,
+        const vector& initialDirection,
+        const scalar lengthScale
     );
 
     public:
@@ -198,6 +319,27 @@ class addModelOnceScatter
     {
         return bodyAdded_;
     }
+
+    label maxConsecutiveFailures() const override;
+
+    label maxTotalAttempts() const override;
+
+    bool strictCompletion() const override;
+
+    bool targetReached() const override;
+
+    void bodyRegistered
+    (
+        const word& bodyName,
+        const volScalarField& body
+    ) override;
+
+    void reportAdditionSummary
+    (
+        const word& bodyName,
+        const volScalarField& body,
+        const word& stopReason
+    ) override;
 
 };
 

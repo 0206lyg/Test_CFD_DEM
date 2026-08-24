@@ -98,6 +98,7 @@ octreeField_(mesh_.nCells(), 0),
 timeBased_(false),
 fieldBased_(false),
 fieldCurrentValue_(0),
+startAfterTime_(-GREAT),
 allActiveCellsInMesh_(true),
 randGen_(clock::getTime())
 {
@@ -111,6 +112,15 @@ addModelRepeatRandomPosition::~addModelRepeatRandomPosition()
 //---------------------------------------------------------------------------//
 void addModelRepeatRandomPosition::init()
 {
+    // Optional guard for inlet/replenishment models.  With startAfterTime 0,
+    // the model does not alter an independently generated t=0 packing, but it
+    // becomes active as soon as simulation time advances beyond zero.
+    startAfterTime_ = coeffsDict_.lookupOrDefault<scalar>
+    (
+        "startAfterTime",
+        -GREAT
+    );
+
     // set sizes to necessary datatypes
     cellsInBoundBox_.setSize(Pstream::nProcs());
     cellZonePoints_.setSize(Pstream::nProcs());
@@ -274,6 +284,10 @@ void addModelRepeatRandomPosition::init()
 //---------------------------------------------------------------------------//
 bool addModelRepeatRandomPosition::shouldAddBody(const volScalarField& body)
 {
+    if (mesh_.time().value() <= startAfterTime_ + SMALL)
+    {
+        return false;
+    }
 
     if (timeBased_)
     {
