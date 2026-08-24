@@ -160,6 +160,14 @@ namespace Foam
             return bounds;
         }
 
+        scalar geometricVolume() const final override
+        {
+            return
+                (4.0/3.0)
+               *Foam::constant::mathematical::pi
+               *pow(radius_, 3);
+        }
+
         void synchronPos(label owner = -1) final override;
 
         void writeBodyInfo(label bodyId, IOdictionary& dict, word path) final override
