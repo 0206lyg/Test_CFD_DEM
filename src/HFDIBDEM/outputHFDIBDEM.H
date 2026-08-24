@@ -56,6 +56,7 @@ namespace outputHFDIBDEM
         iB_Info,
         DEM_Info,
         addModel_Info,
+        addModelSummary_Info,
         parallelDEM_Info
     };
 
@@ -67,6 +68,7 @@ namespace outputHFDIBDEM
         bool printIb;
         bool printDEM;
         bool printAddModel;
+        bool printAddModelSummary;
         bool printParallelDEM;
         bool print;
         bool printParDEM;
@@ -81,6 +83,7 @@ namespace outputHFDIBDEM
             printIb = true;
             printDEM = true;
             printAddModel = true;
+            printAddModelSummary = true;
             printParallelDEM = true;
             print = true;
             printParDEM = true;
@@ -89,17 +92,27 @@ namespace outputHFDIBDEM
             outputTable.insert(iB_Info, printIb);
             outputTable.insert(DEM_Info, printDEM);
             outputTable.insert(addModel_Info, printAddModel);
+            outputTable.insert(addModelSummary_Info, printAddModelSummary);
             outputTable.insert(parallelDEM_Info, printParallelDEM);
         }
         // Destructors -----------------------------------------------------
         ~InfoHFDIBDEM(){}
 
-        void setOutput(bool basicB, bool ibB, bool demB, bool addModelB, bool parDEMB)
+        void setOutput
+        (
+            bool basicB,
+            bool ibB,
+            bool demB,
+            bool addModelB,
+            bool parDEMB,
+            bool addModelSummaryB = false
+        )
         {
             outputTable[basic_Info] = basicB;
             outputTable[iB_Info] = ibB;
             outputTable[DEM_Info] = demB;
             outputTable[addModel_Info] = addModelB;
+            outputTable[addModelSummary_Info] = addModelSummaryB;
             outputTable[parallelDEM_Info] = parDEMB;
         }
 

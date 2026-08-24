@@ -1066,12 +1066,42 @@ void openHFDIBDEM::initialize
         bool DEMoutput = readBool(outputDic.lookup("DEM"));
         bool addModelOutput = readBool(outputDic.lookup("addModel"));
         bool parallelDEMOutput = readBool(outputDic.lookup("parallelDEM"));
+
+        word addModelVerbosity("verbose");
+        if (outputDic.found("addModelVerbosity"))
+        {
+            addModelVerbosity = word(outputDic.lookup("addModelVerbosity"));
+        }
+
+        if
+        (
+            addModelVerbosity != "verbose"
+         && addModelVerbosity != "summary"
+         && addModelVerbosity != "silent"
+        )
+        {
+            FatalIOErrorInFunction(outputDic)
+                << "Unknown addModelVerbosity '" << addModelVerbosity << "'. "
+                << "Valid values are verbose, summary, and silent."
+                << exit(FatalIOError);
+        }
+
+        const bool addModelDetailOutput
+        (
+            addModelOutput && addModelVerbosity == "verbose"
+        );
+        const bool addModelSummaryOutput
+        (
+            addModelOutput && addModelVerbosity != "silent"
+        );
+
         InfoH.setOutput(
             basicOutput,
             iBoutput,
             DEMoutput,
-            addModelOutput,
-            parallelDEMOutput
+            addModelDetailOutput,
+            parallelDEMOutput,
+            addModelSummaryOutput
         );
     }
 
@@ -1151,14 +1181,30 @@ void openHFDIBDEM::initialize
         word bodyName(bodyNames_[modelI]);
         InfoH << basic_Info << "Creating immersed body based on: " << bodyName << endl;
 
-        label maxAdditions(1000);
-        label cAddition(0);
+        const label maxConsecutiveFailures
+        (
+            addModels_[modelI].maxConsecutiveFailures()
+        );
+        const label maxTotalAttempts
+        (
+            addModels_[modelI].maxTotalAttempts()
+        );
 
-        while (addModels_[modelI].shouldAddBody(body) and cAddition < maxAdditions and immersedBodies_.size() < solverInfo::getNSolidsTreshnold())
+        label consecutiveFailures(0);
+        label totalAttempts(0);
+
+        while
+        (
+            (maxConsecutiveFailures < 0
+          || consecutiveFailures < maxConsecutiveFailures)
+         && (maxTotalAttempts < 0 || totalAttempts < maxTotalAttempts)
+         && immersedBodies_.size() < solverInfo::getNSolidsTreshnold()
+         && addModels_[modelI].shouldAddBody(body)
+        )
         {
             InfoH << addModel_Info << "addModel invoked action, trying to add new body" << endl;
             std::shared_ptr<geomModel> bodyGeomModel(addModels_[modelI].addBody(body, immersedBodies_));
-            cAddition++;
+            totalAttempts++;
 
             // initialize the immersed bodies
             if (addModels_[modelI].getBodyAdded())
@@ -1191,16 +1237,59 @@ void openHFDIBDEM::initialize
                     immersedBodies_[addIBPos].initSyncWithFlow(U);
                 }
                 verletList_.addBodyToVList(immersedBodies_[addIBPos]);
+                addModels_[modelI].bodyRegistered(bodyName, body);
                 InfoH << addModel_Info << "Body based on: " << bodyName << " successfully added" << endl;
-                cAddition = 0;
+                consecutiveFailures = 0;
             }
             else
             {
+                consecutiveFailures++;
                 InfoH << addModel_Info << "Body based on: "
                     << bodyName << " should have been added but was not "
                     << "(probably overlap with an already existing body)"
                     << endl;
             }
+        }
+
+        word stopReason("modelStopped");
+        const bool completed(addModels_[modelI].targetReached());
+
+        if (completed)
+        {
+            stopReason = "targetReached";
+        }
+        else if
+        (
+            maxConsecutiveFailures >= 0
+         && consecutiveFailures >= maxConsecutiveFailures
+        )
+        {
+            stopReason = "maxConsecutiveFailures";
+        }
+        else if (maxTotalAttempts >= 0 && totalAttempts >= maxTotalAttempts)
+        {
+            stopReason = "maxTotalAttempts";
+        }
+        else if
+        (
+            immersedBodies_.size()
+         >= solverInfo::getNSolidsTreshnold()
+        )
+        {
+            stopReason = "nSolidsInDomain";
+        }
+
+        addModels_[modelI].reportAdditionSummary(bodyName, body, stopReason);
+
+        if (addModels_[modelI].strictCompletion() && !completed)
+        {
+            FatalErrorInFunction
+                << "Addition model for body '" << bodyName
+                << "' did not reach its target." << nl
+                << "Stop reason: " << stopReason << nl
+                << "Total attempts: " << totalAttempts << nl
+                << "Consecutive failures: " << consecutiveFailures
+                << exit(FatalError);
         }
     }
 
