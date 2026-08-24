@@ -249,6 +249,15 @@ namespace Foam
             return bound;
         }
 
+        // Exact geometric volume of the current (possibly scaled) body.
+        // A negative value denotes a geometry for which no exact volume
+        // implementation is available.  Keeping a default implementation
+        // avoids forcing unrelated/aggregate geometry models to implement it.
+        virtual scalar geometricVolume() const
+        {
+            return -1.0;
+        }
+
         virtual void synchronPos(label owner = -1)
         {
             InfoH << iB_Info << "9-- geomModelMessage-- "
