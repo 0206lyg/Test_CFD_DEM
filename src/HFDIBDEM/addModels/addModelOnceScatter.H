@@ -114,8 +114,9 @@ class addModelOnceScatter
 	bool		geometricVolumeBased_;
 	scalar		fieldCurrentValue_;
 
-    // Exact-volume, hybrid-lattice/fast-RSA state.  This is kept in the
-    // onceScatter model so all once-only placement modes remain together.
+    // Exact-volume packing state.  The complete continuous-pose plan is
+    // constructed before the first immersedBody is registered, so initial
+    // backtracking never mutates solver/contact state.
     scalar      targetGeometricFraction_;
     scalar      regionVolume_;
     scalar      particleVolume_;
@@ -124,25 +125,21 @@ class addModelOnceScatter
     label       targetBodyCount_;
     label       acceptedBodyCount_;
     label       totalPackingAttempts_;
-    label       attemptsSinceSuccess_;
-    label       lastSuccessfulAttemptSpan_;
-    label       maxConsecutiveFailures_;
-    label       maxTotalAttempts_;
     label       reportEveryAccepted_;
 
+    bool        packingPlanReady_;
+    label       stagnationWindow_;
+    label       localRepackAttempts_;
+    label       minLocalRepackBodies_;
+    label       maxLocalRepackBodies_;
+    label       maxPlannerRestarts_;
+    label       localRepackCount_;
+    label       plannerRestartCount_;
+
     word        packingStrategy_;
-    vector      latticeCellSize_;
-    vector      latticeOrigin_;
-    label       nLatticeCellsX_;
-    label       nLatticeCellsY_;
-    label       nLatticeCellsZ_;
-    label       latticeCapacity_;
-    label       latticeFallbackCount_;
-    labelList   latticeSiteOrder_;
 
     bool        uniformRandomRotation_;
     bool        packingIsSphere_;
-    bool        pendingPackingBody_;
 
     pointField  sourcePoints_;
     vector      sourceCentre_;
@@ -154,15 +151,11 @@ class addModelOnceScatter
     label       nPackingBinsZ_;
 
     DynamicList<pointField> acceptedPackingPoints_;
+    DynamicList<pointField> plannedActualPoints_;
     DynamicList<boundBox>   acceptedPackingBounds_;
     DynamicList<vector>     acceptedPackingCentres_;
     DynamicList<scalar>     acceptedPackingRadii_;
     HashTable<DynamicLabelList, label, Hash<label>> packingBins_;
-
-    pointField  pendingPackingPoints_;
-    boundBox    pendingPackingBounds_;
-    vector      pendingPackingCentre_;
-    scalar      pendingPackingRadius_;
 
     List<DynamicLabelList>  cellsInBoundBox_;
     List<pointField>        cellZonePoints_;
@@ -184,7 +177,28 @@ class addModelOnceScatter
     // Exact-volume packing helpers --------------------------------
     void initializeGeometricVolumePacking();
 
-    void initializeHybridLattice();
+    void prepareContinuousPackingPlan();
+
+    bool tryLocalPackingRebuild
+    (
+        const pointField& triggerActualPoints,
+        const pointField& triggerCollisionPoints,
+        const vector& triggerCentre,
+        const scalar triggerRadius,
+        const boundBox& triggerBounds,
+        const DynamicLabelList& directBlockers
+    );
+
+    void appendPackingPose
+    (
+        const pointField& actualPoints,
+        const pointField& collisionPoints,
+        const vector& centre,
+        const scalar radius,
+        const boundBox& bounds
+    );
+
+    void rebuildPackingBins();
 
     std::shared_ptr<geomModel> addGeometricVolumeBody
     (
@@ -197,30 +211,29 @@ class addModelOnceScatter
 
     tensor axisAngleRotation(const scalar angle, const vector& axis) const;
 
-    void createPackingCandidate
+    bool createPackingCandidate
     (
-        pointField& actualPoints,
-        pointField& collisionPoints,
-        vector& centre,
-        scalar& radius,
-        boundBox& collisionBounds
-    );
-
-    void createLatticeCandidate
-    (
-        const label siteIndex,
-        const bool randomOrientation,
         pointField& actualPoints,
         pointField& collisionPoints,
         vector& centre,
         scalar& radius,
         boundBox& collisionBounds,
-        bool& fitsReservedCell
+        const boundBox& centreSamplingBounds
     );
 
-    boundBox latticeCellBounds(const label siteIndex) const;
+    bool packingPosesIntersect
+    (
+        const pointField& firstPoints,
+        const vector& firstCentre,
+        const scalar firstRadius,
+        const boundBox& firstBounds,
+        const pointField& secondPoints,
+        const vector& secondCentre,
+        const scalar secondRadius,
+        const boundBox& secondBounds
+    ) const;
 
-    bool packingCandidateInContact
+    DynamicLabelList packingCandidateBlockers
     (
         const pointField& points,
         const vector& centre,
@@ -229,8 +242,6 @@ class addModelOnceScatter
     ) const;
 
     label packingBinKey(const vector& centre) const;
-
-    void addPendingBodyToPackingBins();
 
     static vector minkowskiSupport
     (

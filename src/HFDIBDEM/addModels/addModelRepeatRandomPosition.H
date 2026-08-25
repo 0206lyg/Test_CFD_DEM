@@ -114,6 +114,30 @@ class addModelRepeatRandomPosition
 	scalar		fieldCurrentValue_;
     scalar      startAfterTime_;
 
+    word        placementStrategy_;
+    scalar      clearanceScale_;
+    label       maxCandidateAttemptsPerTimeStep_;
+    label       candidateBatchSize_;
+    label       attemptsOnTimeLevel_;
+    label       attemptTimeIndex_;
+    bool        exactPlacementExhausted_;
+    boolList    containingFaces_;
+
+    vector      insertionMinBound_;
+    vector      insertionMaxBound_;
+
+    bool        exactPlacementIsSphere_;
+    scalar      exactPlacementRadius_;
+    scalar      exactBinSize_;
+    vector      exactBinMin_;
+    vector      exactBinMax_;
+    label       nExactBinsX_;
+    label       nExactBinsY_;
+    label       nExactBinsZ_;
+    label       exactBinsTimeIndex_;
+    label       exactBinsBodyCount_;
+    HashTable<DynamicLabelList, label, Hash<label>> exactBodyBins_;
+
     List<DynamicLabelList>  cellsInBoundBox_;
     List<pointField>        cellZonePoints_;
     boundBox                cellZoneBounds_;
@@ -121,6 +145,68 @@ class addModelRepeatRandomPosition
     bool        allActiveCellsInMesh_;
 
     Random          randGen_;
+
+    std::shared_ptr<geomModel> addBodyContinuousExact
+    (
+        const volScalarField& body,
+        PtrList<immersedBody>& immersedBodies
+    );
+
+    bool moveBodyToContinuousPosition();
+
+    void resetExactPlacementBudget();
+
+    void initializeContinuousExactPlacement();
+
+    void rebuildExactBodyBins
+    (
+        PtrList<immersedBody>& immersedBodies
+    );
+
+    label exactBinKey
+    (
+        const label ix,
+        const label iy,
+        const label iz
+    ) const;
+
+    label exactBinCoordinate
+    (
+        const scalar coordinate,
+        const direction cmpt
+    ) const;
+
+    bool exactCandidateInContact
+    (
+        PtrList<immersedBody>& immersedBodies
+    ) const;
+
+    static vector minkowskiSupport
+    (
+        const pointField& first,
+        const pointField& second,
+        const vector& direction
+    );
+
+    static bool sameDirection
+    (
+        const vector& first,
+        const vector& second
+    );
+
+    static bool updateSimplex
+    (
+        DynamicList<vector>& simplex,
+        vector& direction
+    );
+
+    static bool convexBodiesIntersect
+    (
+        const pointField& first,
+        const pointField& second,
+        const vector& initialDirection,
+        const scalar lengthScale
+    );
 
     public:
 

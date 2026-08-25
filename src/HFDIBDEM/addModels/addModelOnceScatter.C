@@ -111,23 +111,18 @@ clearanceScale_(1),
 targetBodyCount_(0),
 acceptedBodyCount_(0),
 totalPackingAttempts_(0),
-attemptsSinceSuccess_(0),
-lastSuccessfulAttemptSpan_(0),
-maxConsecutiveFailures_(10000),
-maxTotalAttempts_(100000),
 reportEveryAccepted_(1),
-packingStrategy_("hybridLattice"),
-latticeCellSize_(vector::zero),
-latticeOrigin_(vector::zero),
-nLatticeCellsX_(0),
-nLatticeCellsY_(0),
-nLatticeCellsZ_(0),
-latticeCapacity_(0),
-latticeFallbackCount_(0),
-latticeSiteOrder_(),
+packingPlanReady_(false),
+stagnationWindow_(20000),
+localRepackAttempts_(200000),
+minLocalRepackBodies_(4),
+maxLocalRepackBodies_(16),
+maxPlannerRestarts_(3),
+localRepackCount_(0),
+plannerRestartCount_(0),
+packingStrategy_("continuousRandomBacktracking"),
 uniformRandomRotation_(false),
 packingIsSphere_(false),
-pendingPackingBody_(false),
 sourcePoints_(),
 sourceCentre_(vector::zero),
 sourceSphereRadius_(0),
@@ -137,14 +132,11 @@ nPackingBinsX_(1),
 nPackingBinsY_(1),
 nPackingBinsZ_(1),
 acceptedPackingPoints_(),
+plannedActualPoints_(),
 acceptedPackingBounds_(),
 acceptedPackingCentres_(),
 acceptedPackingRadii_(),
 packingBins_(),
-pendingPackingPoints_(),
-pendingPackingBounds_(),
-pendingPackingCentre_(vector::zero),
-pendingPackingRadius_(0),
 polygonPrismGeometry_(),
 allActiveCellsInMesh_(true),
 randGen_
@@ -728,32 +720,62 @@ void addModelOnceScatter::initializeGeometricVolumePacking()
 
     clearanceScale_ =
         coeffsDict_.lookupOrDefault<scalar>("clearanceScale", 1.0);
-    maxConsecutiveFailures_ =
-        coeffsDict_.lookupOrDefault<label>
-        (
-            "maxConsecutiveFailures",
-            10000
-        );
-    maxTotalAttempts_ =
-        coeffsDict_.lookupOrDefault<label>("maxTotalAttempts", 100000);
+    stagnationWindow_ = coeffsDict_.lookupOrDefault<label>
+    (
+        "stagnationWindow",
+        20000
+    );
+    localRepackAttempts_ = coeffsDict_.lookupOrDefault<label>
+    (
+        "localRepackAttempts",
+        200000
+    );
+    minLocalRepackBodies_ = coeffsDict_.lookupOrDefault<label>
+    (
+        "minLocalRepackBodies",
+        4
+    );
+    maxLocalRepackBodies_ = coeffsDict_.lookupOrDefault<label>
+    (
+        "maxLocalRepackBodies",
+        16
+    );
+    maxPlannerRestarts_ = coeffsDict_.lookupOrDefault<label>
+    (
+        "maxPlannerRestarts",
+        3
+    );
     reportEveryAccepted_ = Foam::max
     (
         label(1),
-        coeffsDict_.lookupOrDefault<label>("reportEveryAccepted", 1)
+        coeffsDict_.lookupOrDefault<label>("reportEveryAccepted", 100)
     );
 
-    if (clearanceScale_ < 1.0)
+    if (mag(clearanceScale_ - 1.0) > SMALL)
     {
         FatalErrorInFunction
-            << "clearanceScale must be at least 1.0; got "
+            << "continuousRandomBacktracking requires clearanceScale 1.0; "
+            << "got "
             << clearanceScale_ << nl
             << exit(FatalError);
     }
-    if (maxConsecutiveFailures_ < 1 || maxTotalAttempts_ < 1)
+    if
+    (
+        stagnationWindow_ < 1
+     || localRepackAttempts_ < 1
+     || minLocalRepackBodies_ < 1
+     || maxLocalRepackBodies_ < minLocalRepackBodies_
+     || maxPlannerRestarts_ < 0
+    )
     {
         FatalErrorInFunction
-            << "maxConsecutiveFailures and maxTotalAttempts must be "
-            << "positive." << nl << exit(FatalError);
+            << "Invalid continuousRandomBacktracking controls: "
+            << "stagnationWindow=" << stagnationWindow_
+            << ", localRepackAttempts=" << localRepackAttempts_
+            << ", minLocalRepackBodies=" << minLocalRepackBodies_
+            << ", maxLocalRepackBodies=" << maxLocalRepackBodies_
+            << ", maxPlannerRestarts=" << maxPlannerRestarts_
+            << nl << exit(FatalError);
     }
 
     const contactType geometryType = geomModel_->getcType();
@@ -829,18 +851,14 @@ void addModelOnceScatter::initializeGeometricVolumePacking()
     packingStrategy_ = coeffsDict_.lookupOrDefault<word>
     (
         "packingStrategy",
-        "hybridLattice"
+        "continuousRandomBacktracking"
     );
-    if (packingStrategy_ == "hybridLattice")
-    {
-        initializeHybridLattice();
-    }
-    else if (packingStrategy_ != "randomSequential")
+    if (packingStrategy_ != "continuousRandomBacktracking")
     {
         FatalErrorInFunction
             << "Unknown geometricVolumeBased packingStrategy '"
-            << packingStrategy_ << "'. Valid values are hybridLattice and "
-            << "randomSequential." << nl << exit(FatalError);
+            << packingStrategy_ << "'. This version supports only "
+            << "continuousRandomBacktracking." << nl << exit(FatalError);
     }
 
     packingBinSize_ = 2.0*packingRadius_;
@@ -872,178 +890,6 @@ void addModelOnceScatter::initializeGeometricVolumePacking()
 }
 
 //---------------------------------------------------------------------------//
-void addModelOnceScatter::initializeHybridLattice()
-{
-    boundBox referenceCollisionBounds;
-
-    if (packingIsSphere_)
-    {
-        const vector radiusVector
-        (
-            packingRadius_,
-            packingRadius_,
-            packingRadius_
-        );
-        referenceCollisionBounds = boundBox
-        (
-            sourceCentre_ - radiusVector,
-            sourceCentre_ + radiusVector
-        );
-    }
-    else
-    {
-        pointField referencePoints(sourcePoints_);
-        referencePoints -= sourceCentre_;
-        referencePoints *= fixedScale_*clearanceScale_;
-        referencePoints += sourceCentre_;
-        referenceCollisionBounds = boundBox(referencePoints, false);
-    }
-
-    const vector referenceCellSize(referenceCollisionBounds.span());
-    if
-    (
-        referenceCellSize.x() <= VSMALL
-     || referenceCellSize.y() <= VSMALL
-     || referenceCellSize.z() <= VSMALL
-    )
-    {
-        FatalErrorInFunction
-            << "Cannot construct hybridLattice from zero-sized reference "
-            << "AABB " << referenceCellSize << nl << exit(FatalError);
-    }
-
-    const vector regionSpan(cellZoneBounds_.span());
-    const label maxCellsX = label
-    (
-        std::floor(regionSpan.x()/referenceCellSize.x() + 100*SMALL)
-    );
-    const label maxCellsY = label
-    (
-        std::floor(regionSpan.y()/referenceCellSize.y() + 100*SMALL)
-    );
-    const label maxCellsZ = label
-    (
-        std::floor(regionSpan.z()/referenceCellSize.z() + 100*SMALL)
-    );
-
-    if
-    (
-        maxCellsX < 1
-     || maxCellsY < 1
-     || maxCellsZ < 1
-    )
-    {
-        FatalErrorInFunction
-            << "Reference body AABB " << referenceCellSize
-            << " does not fit in packing region span " << regionSpan << nl
-            << exit(FatalError);
-    }
-
-    const label maximumCapacity = maxCellsX*maxCellsY*maxCellsZ;
-    if (targetBodyCount_ > maximumCapacity)
-    {
-        FatalErrorInFunction
-            << "hybridLattice maximum capacity " << maximumCapacity
-            << " is smaller than nearest target count " << targetBodyCount_
-            << ". Maximum guaranteed geometric fraction is "
-            << maximumCapacity*particleVolume_/regionVolume_ << ". "
-            << "Use a denser reference orientation/geometry or explicitly "
-            << "select packingStrategy randomSequential (not guaranteed)."
-            << nl << exit(FatalError);
-    }
-
-    // Among all reference-body-compatible integer grids that hold the target,
-    // maximize the smallest physical cell dimension.  This deliberately uses
-    // fewer than the maximum possible cells, providing rotational and
-    // translational slack.  At equal score, prefer the lower capacity.
-    scalar bestMinimumCellSize(-1);
-    label bestCapacity(-1);
-
-    for (label nx = 1; nx <= maxCellsX; ++nx)
-    {
-        for (label ny = 1; ny <= maxCellsY; ++ny)
-        {
-            for (label nz = 1; nz <= maxCellsZ; ++nz)
-            {
-                const label capacity = nx*ny*nz;
-                if (capacity < targetBodyCount_)
-                {
-                    continue;
-                }
-
-                const scalar minimumCellSize = Foam::min
-                (
-                    regionSpan.x()/nx,
-                    Foam::min(regionSpan.y()/ny, regionSpan.z()/nz)
-                );
-
-                if
-                (
-                    minimumCellSize > bestMinimumCellSize + SMALL
-                 ||
-                    (
-                        mag(minimumCellSize - bestMinimumCellSize) <= SMALL
-                     && (bestCapacity < 0 || capacity < bestCapacity)
-                    )
-                )
-                {
-                    bestMinimumCellSize = minimumCellSize;
-                    bestCapacity = capacity;
-                    nLatticeCellsX_ = nx;
-                    nLatticeCellsY_ = ny;
-                    nLatticeCellsZ_ = nz;
-                }
-            }
-        }
-    }
-
-    if (bestCapacity < 0)
-    {
-        FatalErrorInFunction
-            << "Unable to find a hybridLattice grid for target count "
-            << targetBodyCount_ << nl << exit(FatalError);
-    }
-
-    latticeCapacity_ = bestCapacity;
-    latticeCellSize_ = vector
-    (
-        regionSpan.x()/nLatticeCellsX_,
-        regionSpan.y()/nLatticeCellsY_,
-        regionSpan.z()/nLatticeCellsZ_
-    );
-    latticeOrigin_ = cellZoneBounds_.min();
-
-    latticeSiteOrder_.setSize(latticeCapacity_);
-    forAll(latticeSiteOrder_, siteI)
-    {
-        latticeSiteOrder_[siteI] = siteI;
-    }
-
-    // Fisher-Yates with the model's deterministic per-rank seed.  Selecting
-    // the first targetBodyCount_ entries therefore distributes unoccupied
-    // cells throughout the region instead of filling from one corner.
-    for (label siteI = latticeCapacity_ - 1; siteI > 0; --siteI)
-    {
-        label swapI = label
-        (
-            std::floor(packingRandom01()*scalar(siteI + 1))
-        );
-        swapI = Foam::max(label(0), Foam::min(swapI, siteI));
-
-        const label savedSite(latticeSiteOrder_[siteI]);
-        latticeSiteOrder_[siteI] = latticeSiteOrder_[swapI];
-        latticeSiteOrder_[swapI] = savedSite;
-    }
-
-    InfoH << addModelSummary_Info
-        << "[onceScatter] hybridLattice capacity " << latticeCapacity_
-        << " (" << nLatticeCellsX_ << 'x' << nLatticeCellsY_ << 'x'
-        << nLatticeCellsZ_ << "), target " << targetBodyCount_
-        << ", cell size " << latticeCellSize_
-        << ", reference AABB " << referenceCellSize << endl;
-}
-
-//---------------------------------------------------------------------------//
 std::shared_ptr<geomModel> addModelOnceScatter::addGeometricVolumeBody
 (
     PtrList<immersedBody>& immersedBodies
@@ -1059,129 +905,24 @@ std::shared_ptr<geomModel> addModelOnceScatter::addGeometricVolumeBody
             << exit(FatalError);
     }
 
-    totalPackingAttempts_++;
-    attemptsSinceSuccess_++;
-    bodyAdditionAttemptCounter_++;
-
-    pointField actualPoints;
-    pointField collisionPoints;
-    vector candidateCentre(vector::zero);
-    scalar candidateRadius(0);
-    boundBox candidateBounds;
-
-    bool candidateInContact(false);
-
-    if (packingStrategy_ == "hybridLattice")
+    if (!packingPlanReady_)
     {
-        const label siteIndex = latticeSiteOrder_[acceptedBodyCount_];
-        bool fitsReservedCell(false);
-
-        if (rotateParticles_ && !packingIsSphere_)
-        {
-            createLatticeCandidate
-            (
-                siteIndex,
-                true,
-                actualPoints,
-                collisionPoints,
-                candidateCentre,
-                candidateRadius,
-                candidateBounds,
-                fitsReservedCell
-            );
-
-            candidateInContact = !fitsReservedCell;
-            if (!candidateInContact)
-            {
-                candidateInContact = packingCandidateInContact
-                (
-                    collisionPoints,
-                    candidateCentre,
-                    candidateRadius,
-                    candidateBounds
-                );
-            }
-        }
-        else
-        {
-            // No random pose was requested: place the guaranteed reference
-            // orientation directly and count one pose attempt.
-            candidateInContact = true;
-        }
-
-        if (candidateInContact)
-        {
-            // The random pose either left its reserved cell or touched a
-            // previously accepted pose.  A reference-orientation body whose
-            // collision AABB fills only this cell is guaranteed not to
-            // overlap bodies reserved in any other cell.
-            if (rotateParticles_ && !packingIsSphere_)
-            {
-                totalPackingAttempts_++;
-                attemptsSinceSuccess_++;
-                bodyAdditionAttemptCounter_++;
-                latticeFallbackCount_++;
-            }
-
-            createLatticeCandidate
-            (
-                siteIndex,
-                false,
-                actualPoints,
-                collisionPoints,
-                candidateCentre,
-                candidateRadius,
-                candidateBounds,
-                fitsReservedCell
-            );
-
-            if (!fitsReservedCell)
-            {
-                FatalErrorInFunction
-                    << "Internal hybridLattice error: reference body does "
-                    << "not fit reserved site " << siteIndex << nl
-                    << exit(FatalError);
-            }
-            candidateInContact = false;
-        }
-    }
-    else
-    {
-        createPackingCandidate
-        (
-            actualPoints,
-            collisionPoints,
-            candidateCentre,
-            candidateRadius,
-            candidateBounds
-        );
-
-        candidateInContact = packingCandidateInContact
-        (
-            collisionPoints,
-            candidateCentre,
-            candidateRadius,
-            candidateBounds
-        );
+        prepareContinuousPackingPlan();
     }
 
-    bodyAdded_ = !candidateInContact;
-    pendingPackingBody_ = false;
-
-    if (!bodyAdded_)
+    if (acceptedBodyCount_ >= plannedActualPoints_.size())
     {
-        // The driver ignores the returned geometry when bodyAdded_ is false.
-        // Avoid rebuilding/copying the STL search structures for every RSA
-        // rejection; this is important near the packing limit.
-        return std::shared_ptr<geomModel>();
+        FatalErrorInFunction
+            << "The continuous packing plan contains only "
+            << plannedActualPoints_.size() << " poses, but pose "
+            << acceptedBodyCount_ << " was requested." << nl
+            << exit(FatalError);
     }
 
-    pendingPackingPoints_ = collisionPoints;
-    pendingPackingBounds_ = candidateBounds;
-    pendingPackingCentre_ = candidateCentre;
-    pendingPackingRadius_ = candidateRadius;
-    pendingPackingBody_ = true;
-    lastSuccessfulAttemptSpan_ = attemptsSinceSuccess_;
+    const pointField& actualPoints =
+        plannedActualPoints_[acceptedBodyCount_];
+
+    bodyAdded_ = true;
 
     if (packingIsSphere_)
     {
@@ -1195,6 +936,593 @@ std::shared_ptr<geomModel> addModelOnceScatter::addGeometricVolumeBody
     }
 
     return geomModel_->getCopy();
+}
+
+//---------------------------------------------------------------------------//
+void addModelOnceScatter::appendPackingPose
+(
+    const pointField& actualPoints,
+    const pointField& collisionPoints,
+    const vector& centre,
+    const scalar radius,
+    const boundBox& bounds
+)
+{
+    const label bodyI = acceptedPackingPoints_.size();
+
+    plannedActualPoints_.append(actualPoints);
+    acceptedPackingPoints_.append(collisionPoints);
+    acceptedPackingBounds_.append(bounds);
+    acceptedPackingCentres_.append(centre);
+    acceptedPackingRadii_.append(radius);
+
+    const label key = packingBinKey(centre);
+    if (!packingBins_.found(key))
+    {
+        packingBins_.insert(key, DynamicLabelList());
+    }
+    packingBins_[key].append(bodyI);
+}
+
+//---------------------------------------------------------------------------//
+void addModelOnceScatter::rebuildPackingBins()
+{
+    packingBins_.clear();
+    forAll(acceptedPackingCentres_, bodyI)
+    {
+        const label key = packingBinKey(acceptedPackingCentres_[bodyI]);
+        if (!packingBins_.found(key))
+        {
+            packingBins_.insert(key, DynamicLabelList());
+        }
+        packingBins_[key].append(bodyI);
+    }
+}
+
+//---------------------------------------------------------------------------//
+bool addModelOnceScatter::tryLocalPackingRebuild
+(
+    const pointField& triggerActualPoints,
+    const pointField& triggerCollisionPoints,
+    const vector& triggerCentre,
+    const scalar triggerRadius,
+    const boundBox& triggerBounds,
+    const DynamicLabelList& directBlockers
+)
+{
+    const label oldSize = acceptedPackingPoints_.size();
+    if (oldSize == 0 || directBlockers.empty())
+    {
+        return false;
+    }
+
+    // No immersedBody exists yet.  These copies are a complete rollback point
+    // for the bounded in-memory displacement transaction.
+    const DynamicList<pointField> savedActual(plannedActualPoints_);
+    const DynamicList<pointField> savedCollision(acceptedPackingPoints_);
+    const DynamicList<boundBox> savedBounds(acceptedPackingBounds_);
+    const DynamicList<vector> savedCentres(acceptedPackingCentres_);
+    const DynamicList<scalar> savedRadii(acceptedPackingRadii_);
+
+    boolList blockerMask(oldSize, false);
+    label directBlockerCount(0);
+    forAll(directBlockers, blockerI)
+    {
+        const label bodyI = directBlockers[blockerI];
+        if (bodyI < 0 || bodyI >= oldSize)
+        {
+            FatalErrorInFunction
+                << "Invalid blocker index " << bodyI
+                << " for packing plan size " << oldSize << nl
+                << exit(FatalError);
+        }
+
+        if (!blockerMask[bodyI])
+        {
+            blockerMask[bodyI] = true;
+            directBlockerCount++;
+        }
+    }
+
+    const label largestRepack = Foam::min(maxLocalRepackBodies_, oldSize);
+    if (directBlockerCount > largestRepack)
+    {
+        return false;
+    }
+
+    const label firstRepack = Foam::max
+    (
+        directBlockerCount,
+        Foam::min(minLocalRepackBodies_, largestRepack)
+    );
+
+    label repackSize(firstRepack);
+    while (repackSize <= largestRepack)
+    {
+        boolList selected(blockerMask);
+        label selectedCount(directBlockerCount);
+
+        // The movable set contains every direct blocker.  Increasing K adds
+        // the closest poses, enlarging the local displacement network.
+        while (selectedCount < repackSize)
+        {
+            label nearestBody(-1);
+            scalar nearestDistanceSquared(GREAT);
+
+            forAll(savedCentres, bodyI)
+            {
+                if (selected[bodyI])
+                {
+                    continue;
+                }
+
+                const scalar distanceSquared =
+                    magSqr(savedCentres[bodyI] - triggerCentre);
+                if (distanceSquared < nearestDistanceSquared)
+                {
+                    nearestDistanceSquared = distanceSquared;
+                    nearestBody = bodyI;
+                }
+            }
+
+            if (nearestBody < 0)
+            {
+                break;
+            }
+
+            selected[nearestBody] = true;
+            selectedCount++;
+        }
+
+        vector localMinimum(triggerCentre);
+        vector localMaximum(triggerCentre);
+        forAll(savedCentres, bodyI)
+        {
+            if (!selected[bodyI])
+            {
+                continue;
+            }
+
+            for
+            (
+                direction cmpt = 0;
+                cmpt < vector::nComponents;
+                ++cmpt
+            )
+            {
+                localMinimum[cmpt] = Foam::min
+                (
+                    localMinimum[cmpt],
+                    savedCentres[bodyI][cmpt]
+                );
+                localMaximum[cmpt] = Foam::max
+                (
+                    localMaximum[cmpt],
+                    savedCentres[bodyI][cmpt]
+                );
+            }
+        }
+
+        // This is only a centre-proposal window.  Full body support remains
+        // constrained by the physical addition boundBox.
+        const scalar localPadding = packingRadius_;
+        for
+        (
+            direction cmpt = 0;
+            cmpt < vector::nComponents;
+            ++cmpt
+        )
+        {
+            localMinimum[cmpt] = Foam::max
+            (
+                cellZoneBounds_.min()[cmpt],
+                localMinimum[cmpt] - localPadding
+            );
+            localMaximum[cmpt] = Foam::min
+            (
+                cellZoneBounds_.max()[cmpt],
+                localMaximum[cmpt] + localPadding
+            );
+        }
+        const boundBox localCentreBounds(localMinimum, localMaximum);
+
+        // Survivors remain in the ordinary packing arrays and hash.  The local
+        // transaction is held separately until all displaced bodies are
+        // assigned a conflict-free pose.
+        plannedActualPoints_.clear();
+        acceptedPackingPoints_.clear();
+        acceptedPackingBounds_.clear();
+        acceptedPackingCentres_.clear();
+        acceptedPackingRadii_.clear();
+        packingBins_.clear();
+
+        DynamicList<pointField> localActualPoints;
+        DynamicList<pointField> localCollisionPoints;
+        DynamicList<boundBox> localBounds;
+        DynamicList<vector> localCentres;
+        DynamicList<scalar> localRadii;
+
+        for (label bodyI = 0; bodyI < oldSize; ++bodyI)
+        {
+            if (!selected[bodyI])
+            {
+                appendPackingPose
+                (
+                    savedActual[bodyI],
+                    savedCollision[bodyI],
+                    savedCentres[bodyI],
+                    savedRadii[bodyI],
+                    savedBounds[bodyI]
+                );
+            }
+            else if (!blockerMask[bodyI])
+            {
+                localActualPoints.append(savedActual[bodyI]);
+                localCollisionPoints.append(savedCollision[bodyI]);
+                localBounds.append(savedBounds[bodyI]);
+                localCentres.append(savedCentres[bodyI]);
+                localRadii.append(savedRadii[bodyI]);
+            }
+        }
+
+        const label triggerLocalI = localCollisionPoints.size();
+        localActualPoints.append(triggerActualPoints);
+        localCollisionPoints.append(triggerCollisionPoints);
+        localBounds.append(triggerBounds);
+        localCentres.append(triggerCentre);
+        localRadii.append(triggerRadius);
+
+        bool transactionValid
+        (
+            packingCandidateBlockers
+            (
+                triggerCollisionPoints,
+                triggerCentre,
+                triggerRadius,
+                triggerBounds
+            ).empty()
+        );
+
+        // Removing all direct blockers must leave a conflict-free local set.
+        for
+        (
+            label localI = 0;
+            transactionValid && localI < triggerLocalI;
+            ++localI
+        )
+        {
+            transactionValid = !packingPosesIntersect
+            (
+                triggerCollisionPoints,
+                triggerCentre,
+                triggerRadius,
+                triggerBounds,
+                localCollisionPoints[localI],
+                localCentres[localI],
+                localRadii[localI],
+                localBounds[localI]
+            );
+        }
+
+        label unplacedBodies(directBlockerCount);
+        label localAttempts(0);
+
+        while
+        (
+            transactionValid
+         && unplacedBodies > 0
+         && localAttempts < localRepackAttempts_
+        )
+        {
+            pointField actualPoints;
+            pointField collisionPoints;
+            vector centre(vector::zero);
+            scalar radius(0);
+            boundBox bounds;
+
+            const bool candidateFits = createPackingCandidate
+            (
+                actualPoints,
+                collisionPoints,
+                centre,
+                radius,
+                bounds,
+                localCentreBounds
+            );
+
+            localAttempts++;
+            totalPackingAttempts_++;
+            bodyAdditionAttemptCounter_++;
+
+            if
+            (
+                !candidateFits
+             || !packingCandidateBlockers
+                (
+                    collisionPoints,
+                    centre,
+                    radius,
+                    bounds
+                ).empty()
+            )
+            {
+                continue;
+            }
+
+            label localOverlapCount(0);
+            label localOverlapI(-1);
+            forAll(localCollisionPoints, localI)
+            {
+                if
+                (
+                    packingPosesIntersect
+                    (
+                        collisionPoints,
+                        centre,
+                        radius,
+                        bounds,
+                        localCollisionPoints[localI],
+                        localCentres[localI],
+                        localRadii[localI],
+                        localBounds[localI]
+                    )
+                )
+                {
+                    localOverlapCount++;
+                    localOverlapI = localI;
+                    if (localOverlapCount >= 2)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (localOverlapCount == 0)
+            {
+                localActualPoints.append(actualPoints);
+                localCollisionPoints.append(collisionPoints);
+                localBounds.append(bounds);
+                localCentres.append(centre);
+                localRadii.append(radius);
+                unplacedBodies--;
+            }
+            else if
+            (
+                localOverlapCount == 1
+             && localOverlapI != triggerLocalI
+            )
+            {
+                // Occupy one local slot and displace its previous occupant.
+                // The number of unplaced identical bodies is unchanged.
+                localActualPoints[localOverlapI] = actualPoints;
+                localCollisionPoints[localOverlapI] = collisionPoints;
+                localBounds[localOverlapI] = bounds;
+                localCentres[localOverlapI] = centre;
+                localRadii[localOverlapI] = radius;
+            }
+        }
+
+        if (transactionValid && unplacedBodies == 0)
+        {
+            forAll(localCollisionPoints, localI)
+            {
+                appendPackingPose
+                (
+                    localActualPoints[localI],
+                    localCollisionPoints[localI],
+                    localCentres[localI],
+                    localRadii[localI],
+                    localBounds[localI]
+                );
+            }
+
+            if (acceptedPackingPoints_.size() == oldSize + 1)
+            {
+                localRepackCount_++;
+                return true;
+            }
+        }
+
+        // Exact rollback before expanding K or leaving this routine.
+        plannedActualPoints_ = savedActual;
+        acceptedPackingPoints_ = savedCollision;
+        acceptedPackingBounds_ = savedBounds;
+        acceptedPackingCentres_ = savedCentres;
+        acceptedPackingRadii_ = savedRadii;
+        rebuildPackingBins();
+
+        if (repackSize == largestRepack)
+        {
+            break;
+        }
+        repackSize = Foam::min(largestRepack, repackSize + 4);
+    }
+
+    return false;
+}
+
+//---------------------------------------------------------------------------//
+void addModelOnceScatter::prepareContinuousPackingPlan()
+{
+    if (packingPlanReady_)
+    {
+        return;
+    }
+
+    plannedActualPoints_.clear();
+    acceptedPackingPoints_.clear();
+    acceptedPackingBounds_.clear();
+    acceptedPackingCentres_.clear();
+    acceptedPackingRadii_.clear();
+    packingBins_.clear();
+
+    label failuresSinceProgress(0);
+    label bestBlockerCount(targetBodyCount_ + 1);
+    DynamicLabelList bestBlockers;
+    pointField bestActualPoints;
+    pointField bestCollisionPoints;
+    vector bestCentre(vector::zero);
+    scalar bestRadius(0);
+    boundBox bestBounds;
+
+    while (acceptedPackingPoints_.size() < targetBodyCount_)
+    {
+        pointField actualPoints;
+        pointField collisionPoints;
+        vector centre(vector::zero);
+        scalar radius(0);
+        boundBox bounds;
+
+        const bool candidateFits = createPackingCandidate
+        (
+            actualPoints,
+            collisionPoints,
+            centre,
+            radius,
+            bounds,
+            cellZoneBounds_
+        );
+
+        totalPackingAttempts_++;
+        bodyAdditionAttemptCounter_++;
+
+        DynamicLabelList blockers;
+        if (candidateFits)
+        {
+            blockers = packingCandidateBlockers
+            (
+                collisionPoints,
+                centre,
+                radius,
+                bounds
+            );
+        }
+
+        if (candidateFits && blockers.empty())
+        {
+            appendPackingPose
+            (
+                actualPoints,
+                collisionPoints,
+                centre,
+                radius,
+                bounds
+            );
+
+            failuresSinceProgress = 0;
+            bestBlockerCount = targetBodyCount_ + 1;
+            bestBlockers.clear();
+
+            if
+            (
+                acceptedPackingPoints_.size() % reportEveryAccepted_ == 0
+             || acceptedPackingPoints_.size() == targetBodyCount_
+            )
+            {
+                InfoH << addModelSummary_Info
+                    << "[onceScatter planner] planned "
+                    << acceptedPackingPoints_.size() << '/'
+                    << targetBodyCount_ << ", total proposals "
+                    << totalPackingAttempts_ << ", local rebuilds "
+                    << localRepackCount_ << endl;
+            }
+            continue;
+        }
+
+        failuresSinceProgress++;
+        if (candidateFits && blockers.size() < bestBlockerCount)
+        {
+            bestBlockerCount = blockers.size();
+            bestBlockers = blockers;
+            bestActualPoints = actualPoints;
+            bestCollisionPoints = collisionPoints;
+            bestCentre = centre;
+            bestRadius = radius;
+            bestBounds = bounds;
+        }
+
+        if (failuresSinceProgress < stagnationWindow_)
+        {
+            continue;
+        }
+
+        const bool rebuilt =
+            !bestBlockers.empty()
+         && tryLocalPackingRebuild
+            (
+                bestActualPoints,
+                bestCollisionPoints,
+                bestCentre,
+                bestRadius,
+                bestBounds,
+                bestBlockers
+            );
+
+        if (rebuilt)
+        {
+            failuresSinceProgress = 0;
+            bestBlockerCount = targetBodyCount_ + 1;
+            bestBlockers.clear();
+
+            InfoH << addModelSummary_Info
+                << "[onceScatter planner] local rebuild completed, planned "
+                << acceptedPackingPoints_.size() << '/'
+                << targetBodyCount_ << endl;
+            continue;
+        }
+
+        plannerRestartCount_++;
+        if (plannerRestartCount_ > maxPlannerRestarts_)
+        {
+            FatalErrorInFunction
+                << "continuousRandomBacktracking could not construct all "
+                << targetBodyCount_ << " full-size poses after "
+                << plannerRestartCount_ << " complete planning attempts. "
+                << "No partial packing or structured fallback will be used."
+                << nl << "Planned poses before failure: "
+                << acceptedPackingPoints_.size()
+                << nl << "Total continuous proposals: "
+                << totalPackingAttempts_
+                << nl << "Completed local rebuilds: "
+                << localRepackCount_ << nl
+                << exit(FatalError);
+        }
+
+        plannedActualPoints_.clear();
+        acceptedPackingPoints_.clear();
+        acceptedPackingBounds_.clear();
+        acceptedPackingCentres_.clear();
+        acceptedPackingRadii_.clear();
+        packingBins_.clear();
+        failuresSinceProgress = 0;
+        bestBlockerCount = targetBodyCount_ + 1;
+        bestBlockers.clear();
+
+        InfoH << addModelSummary_Info
+            << "[onceScatter planner] restarting continuous plan "
+            << plannerRestartCount_ << '/' << maxPlannerRestarts_ << endl;
+    }
+
+    if
+    (
+        plannedActualPoints_.size() != targetBodyCount_
+     || acceptedPackingPoints_.size() != targetBodyCount_
+     || acceptedPackingBounds_.size() != targetBodyCount_
+     || acceptedPackingCentres_.size() != targetBodyCount_
+     || acceptedPackingRadii_.size() != targetBodyCount_
+    )
+    {
+        FatalErrorInFunction
+            << "Internal continuous packing-plan size mismatch." << nl
+            << exit(FatalError);
+    }
+
+    packingPlanReady_ = true;
+    InfoH << addModelSummary_Info
+        << "[onceScatter planner] complete: " << targetBodyCount_
+        << " continuous full-size poses, " << totalPackingAttempts_
+        << " proposals, " << localRepackCount_ << " local rebuilds, "
+        << plannerRestartCount_ << " restarts" << endl;
 }
 
 //---------------------------------------------------------------------------//
@@ -1293,13 +1621,14 @@ tensor addModelOnceScatter::randomPackingRotation()
 }
 
 //---------------------------------------------------------------------------//
-void addModelOnceScatter::createPackingCandidate
+bool addModelOnceScatter::createPackingCandidate
 (
     pointField& actualPoints,
     pointField& collisionPoints,
     vector& centre,
     scalar& radius,
-    boundBox& collisionBounds
+    boundBox& collisionBounds,
+    const boundBox& centreSamplingBounds
 )
 {
     const tensor rotation(randomPackingRotation());
@@ -1308,16 +1637,25 @@ void addModelOnceScatter::createPackingCandidate
     {
         radius = sourceSphereRadius_*fixedScale_*clearanceScale_;
         const vector radiusVector(radius, radius, radius);
-        const vector minimumCentre(cellZoneBounds_.min() + radiusVector);
-        const vector maximumCentre(cellZoneBounds_.max() - radiusVector);
+        vector minimumCentre(cellZoneBounds_.min() + radiusVector);
+        vector maximumCentre(cellZoneBounds_.max() - radiusVector);
 
         for (direction cmpt = 0; cmpt < vector::nComponents; ++cmpt)
         {
+            minimumCentre[cmpt] = Foam::max
+            (
+                minimumCentre[cmpt],
+                centreSamplingBounds.min()[cmpt]
+            );
+            maximumCentre[cmpt] = Foam::min
+            (
+                maximumCentre[cmpt],
+                centreSamplingBounds.max()[cmpt]
+            );
+
             if (maximumCentre[cmpt] < minimumCentre[cmpt])
             {
-                FatalErrorInFunction
-                    << "The clearance-expanded sphere does not fit in the "
-                    << "addition boundBox." << nl << exit(FatalError);
+                return false;
             }
             centre[cmpt] = minimumCentre[cmpt]
                 + packingRandom01()
@@ -1332,7 +1670,7 @@ void addModelOnceScatter::createPackingCandidate
             centre - radiusVector,
             centre + radiusVector
         );
-        return;
+        return true;
     }
 
     actualPoints = sourcePoints_;
@@ -1357,24 +1695,34 @@ void addModelOnceScatter::createPackingCandidate
         cellZoneBounds_.max() - collisionBounds.max()
     );
 
-    vector translation(vector::zero);
+    vector minimumCentre(sourceCentre_ + minimumTranslation);
+    vector maximumCentre(sourceCentre_ + maximumTranslation);
+
     for (direction cmpt = 0; cmpt < vector::nComponents; ++cmpt)
     {
-        if (maximumTranslation[cmpt] < minimumTranslation[cmpt])
+        minimumCentre[cmpt] = Foam::max
+        (
+            minimumCentre[cmpt],
+            centreSamplingBounds.min()[cmpt]
+        );
+        maximumCentre[cmpt] = Foam::min
+        (
+            maximumCentre[cmpt],
+            centreSamplingBounds.max()[cmpt]
+        );
+
+        if (maximumCentre[cmpt] < minimumCentre[cmpt])
         {
-            FatalErrorInFunction
-                << "The clearance-expanded body does not fit in the "
-                << "addition boundBox in component " << cmpt << nl
-                << exit(FatalError);
+            return false;
         }
-        translation[cmpt] = minimumTranslation[cmpt]
+        centre[cmpt] = minimumCentre[cmpt]
             + packingRandom01()
-             *(maximumTranslation[cmpt] - minimumTranslation[cmpt]);
+             *(maximumCentre[cmpt] - minimumCentre[cmpt]);
     }
 
+    const vector translation(centre - sourceCentre_);
     actualPoints += translation;
     collisionPoints += translation;
-    centre += translation;
     collisionBounds = boundBox(collisionPoints, false);
 
     scalar maximumRadiusSquared = 0;
@@ -1387,184 +1735,7 @@ void addModelOnceScatter::createPackingCandidate
         );
     }
     radius = Foam::sqrt(maximumRadiusSquared);
-}
-
-//---------------------------------------------------------------------------//
-boundBox addModelOnceScatter::latticeCellBounds(const label siteIndex) const
-{
-    const label ix = siteIndex % nLatticeCellsX_;
-    const label siteYZ = siteIndex/nLatticeCellsX_;
-    const label iy = siteYZ % nLatticeCellsY_;
-    const label iz = siteYZ/nLatticeCellsY_;
-
-    const vector cellMinimum
-    (
-        latticeOrigin_.x() + ix*latticeCellSize_.x(),
-        latticeOrigin_.y() + iy*latticeCellSize_.y(),
-        latticeOrigin_.z() + iz*latticeCellSize_.z()
-    );
-    vector cellMaximum(cellMinimum + latticeCellSize_);
-
-    // Avoid a last-cell round-off overshoot beyond the exact addition box.
-    // Internal faces still use the identical arithmetic on both neighbours.
-    if (ix == nLatticeCellsX_ - 1)
-    {
-        cellMaximum.x() = cellZoneBounds_.max().x();
-    }
-    if (iy == nLatticeCellsY_ - 1)
-    {
-        cellMaximum.y() = cellZoneBounds_.max().y();
-    }
-    if (iz == nLatticeCellsZ_ - 1)
-    {
-        cellMaximum.z() = cellZoneBounds_.max().z();
-    }
-
-    return boundBox(cellMinimum, cellMaximum);
-}
-
-//---------------------------------------------------------------------------//
-void addModelOnceScatter::createLatticeCandidate
-(
-    const label siteIndex,
-    const bool randomOrientation,
-    pointField& actualPoints,
-    pointField& collisionPoints,
-    vector& centre,
-    scalar& radius,
-    boundBox& collisionBounds,
-    bool& fitsReservedCell
-)
-{
-    const boundBox cellBounds(latticeCellBounds(siteIndex));
-    const tensor rotation
-    (
-        randomOrientation ? randomPackingRotation() : tensor::I
-    );
-
-    if (packingIsSphere_)
-    {
-        centre = sourceCentre_;
-        radius = packingRadius_;
-        const vector radiusVector(radius, radius, radius);
-
-        actualPoints.setSize(1);
-        actualPoints[0] = centre;
-        collisionPoints = actualPoints;
-        collisionBounds = boundBox
-        (
-            centre - radiusVector,
-            centre + radiusVector
-        );
-    }
-    else
-    {
-        actualPoints = sourcePoints_;
-        actualPoints -= sourceCentre_;
-        actualPoints *= fixedScale_;
-        actualPoints = rotation & actualPoints;
-        actualPoints += sourceCentre_;
-        centre = sourceCentre_;
-
-        collisionPoints = actualPoints;
-        collisionPoints -= centre;
-        collisionPoints *= clearanceScale_;
-        collisionPoints += centre;
-
-        collisionBounds = boundBox(collisionPoints, false);
-
-        scalar maximumRadiusSquared = 0;
-        forAll(collisionPoints, pointI)
-        {
-            maximumRadiusSquared = Foam::max
-            (
-                maximumRadiusSquared,
-                magSqr(collisionPoints[pointI] - centre)
-            );
-        }
-        radius = Foam::sqrt(maximumRadiusSquared);
-    }
-
-    const scalar containmentTolerance =
-        100*SMALL*Foam::max
-        (
-            scalar(1),
-            Foam::max
-            (
-                mag(cellZoneBounds_.span()),
-                mag(latticeCellSize_)
-            )
-        );
-
-    const vector candidateSpan(collisionBounds.span());
-    const vector reservedCellSpan(cellBounds.span());
-    fitsReservedCell = true;
-    for (direction cmpt = 0; cmpt < vector::nComponents; ++cmpt)
-    {
-        if
-        (
-            candidateSpan[cmpt]
-          > reservedCellSpan[cmpt] + containmentTolerance
-        )
-        {
-            fitsReservedCell = false;
-            break;
-        }
-    }
-
-    if (!fitsReservedCell)
-    {
-        return;
-    }
-
-    const vector minimumTranslation
-    (
-        cellBounds.min() - collisionBounds.min()
-    );
-    const vector maximumTranslation
-    (
-        cellBounds.max() - collisionBounds.max()
-    );
-    vector translation(vector::zero);
-
-    // Uniformly position the candidate AABB inside its reserved cell.  The
-    // entire collision geometry remains a subset of that cell, which is the
-    // key non-overlap invariant of the hybrid strategy.
-    for (direction cmpt = 0; cmpt < vector::nComponents; ++cmpt)
-    {
-        const scalar availableTranslation = Foam::max
-        (
-            scalar(0),
-            maximumTranslation[cmpt] - minimumTranslation[cmpt]
-        );
-        translation[cmpt] = minimumTranslation[cmpt]
-            + packingRandom01()*availableTranslation;
-    }
-
-    actualPoints += translation;
-    collisionPoints += translation;
-    centre += translation;
-    collisionBounds = boundBox
-    (
-        collisionBounds.min() + translation,
-        collisionBounds.max() + translation
-    );
-
-    // Final exact containment check guards accumulated floating-point error.
-    for (direction cmpt = 0; cmpt < vector::nComponents; ++cmpt)
-    {
-        if
-        (
-            collisionBounds.min()[cmpt]
-          < cellBounds.min()[cmpt] - containmentTolerance
-         || collisionBounds.max()[cmpt]
-          > cellBounds.max()[cmpt] + containmentTolerance
-        )
-        {
-            fitsReservedCell = false;
-            break;
-        }
-    }
+    return true;
 }
 
 //---------------------------------------------------------------------------//
@@ -1583,7 +1754,46 @@ label addModelOnceScatter::packingBinKey(const vector& centre) const
 }
 
 //---------------------------------------------------------------------------//
-bool addModelOnceScatter::packingCandidateInContact
+bool addModelOnceScatter::packingPosesIntersect
+(
+    const pointField& firstPoints,
+    const vector& firstCentre,
+    const scalar firstRadius,
+    const boundBox& firstBounds,
+    const pointField& secondPoints,
+    const vector& secondCentre,
+    const scalar secondRadius,
+    const boundBox& secondBounds
+) const
+{
+    const scalar combinedRadius = firstRadius + secondRadius;
+    if (magSqr(firstCentre - secondCentre) > sqr(combinedRadius))
+    {
+        return false;
+    }
+
+    if (!firstBounds.overlaps(secondBounds))
+    {
+        return false;
+    }
+
+    if (packingIsSphere_)
+    {
+        return true;
+    }
+
+    return convexBodiesIntersect
+    (
+        firstPoints,
+        secondPoints,
+        firstCentre - secondCentre,
+        combinedRadius
+    );
+}
+
+//---------------------------------------------------------------------------//
+addModelOnceScatter::DynamicLabelList
+addModelOnceScatter::packingCandidateBlockers
 (
     const pointField& points,
     const vector& centre,
@@ -1591,6 +1801,7 @@ bool addModelOnceScatter::packingCandidateInContact
     const boundBox& bounds
 ) const
 {
+    DynamicLabelList blockers;
     const label centreKey = packingBinKey(centre);
     const label centreX = centreKey % nPackingBinsX_;
     const label centreYZ = centreKey/nPackingBinsX_;
@@ -1620,63 +1831,28 @@ bool addModelOnceScatter::packingCandidateInContact
                 forAll(neighbours, neighbourI)
                 {
                     const label bodyI = neighbours[neighbourI];
-                    const scalar combinedRadius =
-                        radius + acceptedPackingRadii_[bodyI];
-
                     if
                     (
-                        magSqr(centre - acceptedPackingCentres_[bodyI])
-                      > sqr(combinedRadius)
-                    )
-                    {
-                        continue;
-                    }
-
-                    if (!bounds.overlaps(acceptedPackingBounds_[bodyI]))
-                    {
-                        continue;
-                    }
-
-                    if (packingIsSphere_)
-                    {
-                        return true;
-                    }
-
-                    if
-                    (
-                        convexBodiesIntersect
+                        packingPosesIntersect
                         (
                             points,
+                            centre,
+                            radius,
+                            bounds,
                             acceptedPackingPoints_[bodyI],
-                            centre - acceptedPackingCentres_[bodyI],
-                            combinedRadius
+                            acceptedPackingCentres_[bodyI],
+                            acceptedPackingRadii_[bodyI],
+                            acceptedPackingBounds_[bodyI]
                         )
                     )
                     {
-                        return true;
+                        blockers.append(bodyI);
                     }
                 }
             }
         }
     }
-    return false;
-}
-
-//---------------------------------------------------------------------------//
-void addModelOnceScatter::addPendingBodyToPackingBins()
-{
-    const label bodyI = acceptedPackingPoints_.size();
-    acceptedPackingPoints_.append(pendingPackingPoints_);
-    acceptedPackingBounds_.append(pendingPackingBounds_);
-    acceptedPackingCentres_.append(pendingPackingCentre_);
-    acceptedPackingRadii_.append(pendingPackingRadius_);
-
-    const label key = packingBinKey(pendingPackingCentre_);
-    if (!packingBins_.found(key))
-    {
-        packingBins_.insert(key, DynamicLabelList());
-    }
-    packingBins_[key].append(bodyI);
+    return blockers;
 }
 
 //---------------------------------------------------------------------------//
@@ -1944,13 +2120,15 @@ bool addModelOnceScatter::convexBodiesIntersect
 //---------------------------------------------------------------------------//
 label addModelOnceScatter::maxConsecutiveFailures() const
 {
-    return geometricVolumeBased_ ? maxConsecutiveFailures_ : 1000;
+    // Geometric packing is completed atomically before registration.  The
+    // driver therefore receives only prevalidated poses, never RSA failures.
+    return geometricVolumeBased_ ? -1 : 1000;
 }
 
 //---------------------------------------------------------------------------//
 label addModelOnceScatter::maxTotalAttempts() const
 {
-    return geometricVolumeBased_ ? maxTotalAttempts_ : -1;
+    return geometricVolumeBased_ ? targetBodyCount_ : -1;
 }
 
 //---------------------------------------------------------------------------//
@@ -1978,18 +2156,15 @@ void addModelOnceScatter::bodyRegistered
     {
         return;
     }
-    if (!pendingPackingBody_)
+    if (!packingPlanReady_ || acceptedBodyCount_ >= targetBodyCount_)
     {
         FatalErrorInFunction
-            << "The driver registered body " << bodyName
-            << " without a pending accepted packing candidate." << nl
+            << "The driver registered unexpected body " << bodyName
+            << " at plan index " << acceptedBodyCount_ << '.' << nl
             << exit(FatalError);
     }
 
-    addPendingBodyToPackingBins();
     acceptedBodyCount_++;
-    attemptsSinceSuccess_ = 0;
-    pendingPackingBody_ = false;
 
     if
     (
@@ -2000,9 +2175,7 @@ void addModelOnceScatter::bodyRegistered
         InfoH << addModelSummary_Info
             << "[onceScatter " << bodyName << "] accepted "
             << acceptedBodyCount_ << '/' << targetBodyCount_
-            << ", pose attempts since previous success "
-            << lastSuccessfulAttemptSpan_
-            << ", total pose attempts " << totalPackingAttempts_
+            << " from prevalidated continuous plan"
             << ", geometric fraction "
             << acceptedBodyCount_*particleVolume_/regionVolume_ << endl;
     }
@@ -2033,8 +2206,8 @@ void addModelOnceScatter::reportAdditionSummary
         << ", strategy " << packingStrategy_
         << ", accepted " << acceptedBodyCount_ << '/' << targetBodyCount_
         << ", total pose attempts " << totalPackingAttempts_
-        << ", lattice capacity " << latticeCapacity_
-        << ", lattice fallbacks " << latticeFallbackCount_
+        << ", local rebuilds " << localRepackCount_
+        << ", planner restarts " << plannerRestartCount_
         << ", geometric fraction "
         << acceptedBodyCount_*particleVolume_/regionVolume_
         << ", lambda fraction " << lambdaFraction << endl;
