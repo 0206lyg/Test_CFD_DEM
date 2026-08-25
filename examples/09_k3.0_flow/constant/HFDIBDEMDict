@@ -1,45 +1,46 @@
 /*--------------------------------*- C++ -*----------------------------------*\
-| =========                 |                                                 |
-| \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox           |
-|  \\    /   O peration     | Version:  8                                     |
-|   \\  /    A nd           | Web:      www.OpenFOAM.org                      |
-|    \\/     M anipulation  |                                                 |
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://openfoam.org
+    \\  /    A nd           | Version:  8
+     \\/     M anipulation  |
 \*---------------------------------------------------------------------------*/
 FoamFile
 {
-    version     2.0;
-    format      ascii;
-    class       dictionary;
-    location    "constant";
-    object      HFDIBDEMDict;
+    version         2;
+    format          ascii;
+    class           dictionary;
+    location        "constant";
+    object          HFDIBDEMDict;
 }
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
-bodyNames ("PH_SC_prefill" "PH_SC_inlet");
+bodyNames       ( "PH_SC_prefill" "PH_SC_inlet" );
 
 interpolationSchemes
 {
-    U cell;
+    U               cell;
 }
 
-surfaceThreshold    1e-4;
+surfaceThreshold 0.0001;
 
-// Maximum DEM substep = stepDEM * maxDeltaT = 0.002 * 1e-3 = 2e-6 s.
-stepDEM              0.002;
-geometricD           (1 1 1);
-recordSimulation     true;
-recordFirstTimeStep  true;
+stepDEM         0.002;
 
-// Safety ceiling for constructor-time generation.  The fieldBased prefill
-// stops naturally when lambda reaches 0.20, normally at about 789 bodies.
-// Runtime inlet replenishment is not limited by this constructor ceiling.
-nSolidsInDomain      2000;
+geometricD      ( 1 1 1 );
+
+recordSimulation true;
+
+recordFirstTimeStep true;
+
+nSolidsInDomain 3000;
 
 outputSetup
 {
     basic       false;
     iB          false;
     DEM         false;
-    addModel    false;
+    addModel    true;
+    addModelVerbosity summary;
     parallelDEM false;
 }
 
@@ -241,17 +242,24 @@ PH_SC_prefill
 
     bodyAddition
     {
-        // Fill the complete upstream reservoir once at t = 0.  Unlike the
-        // persistent inlet model below, onceScatter never refills this region.
+        // Fill the complete upstream reservoir once at t = 0. The requested
+        // fraction is converted to a nearest-integer particle count from the
+        // exact particle and boundBox volumes.
         addModel onceScatter;
 
         onceScatterCoeffs
         {
-            addMode fieldBased;
+            addMode geometricVolumeBased;
+            geometricVolumeBasedCoeffs
+            {
+                fieldValue 0.30;
+            }
+
+            // Retained for easy switching back to the legacy lambda-based mode.
             fieldBasedCoeffs
             {
                 fieldName  lambda;
-                fieldValue 0.2;
+                fieldValue 0.3;
             }
 
             addDomain boundBox;
@@ -261,7 +269,7 @@ PH_SC_prefill
                 maxBound ( 0.020 0.075  0.020);
             }
 
-            scalingMode randomScaling;
+            scalingMode noScaling;
             randomScalingCoeffs
             {
                 minScale 0.98521235637496851;
@@ -280,21 +288,30 @@ PH_SC_prefill
             noRotationCoeffs
             {
             }
+
+            // Fast deterministic exact-count packing. nearest rounding is
+            // hard-coded and intentionally has no dictionary option.
+            packingStrategy       hybridLattice;
+            clearanceScale        1.0;
+            maxConsecutiveFailures 10000;
+            maxTotalAttempts       100000;
+            reportEveryAccepted    1;
+            randomSeed             12345;
         }
     }
 
-    material         particle;
-    bodyGeom         convex;
+    material        particle;
+    bodyGeom        sphere;
     sphere
     {
-        startPosition (0 0.050 0);
-        radius        0.001691682667074;
+        startPosition   ( 0 0.05 0 );
+        radius          0.00166667;
     }
-    updateTorque     true;
-    sdBasedLambda    false;
-    interfaceSpan    1.0;
-    startSynced      true;
-    refineBuffers    0;
+    updateTorque    true;
+    sdBasedLambda   false;
+    interfaceSpan   1;
+    startSynced     true;
+    refineBuffers   0;
     timesToSetStatic -1;
 }
 
@@ -323,11 +340,13 @@ PH_SC_inlet
 
         repeatRandomPositionCoeffs
         {
+            startAfterTime 0;
+
             addMode fieldBased;
             fieldBasedCoeffs
             {
                 fieldName  lambda;
-                fieldValue 0.2;
+                fieldValue 0.3;
             }
 
             addDomain boundBox;
@@ -337,7 +356,7 @@ PH_SC_inlet
                 maxBound ( 0.020 0.075  0.020);
             }
 
-            scalingMode randomScaling;
+            scalingMode noScaling;
             randomScalingCoeffs
             {
                 minScale 0.98521235637496851;
@@ -359,18 +378,18 @@ PH_SC_inlet
         }
     }
 
-    material         particle;
-    bodyGeom         convex;
+    material        particle;
+    bodyGeom        sphere;
     sphere
     {
-        startPosition (0 0.070 0);
-        radius        0.001691682667074;
+        startPosition   ( 0 0.07 0 );
+        radius          0.00166667;
     }
-    updateTorque     true;
-    sdBasedLambda    false;
-    interfaceSpan    1.0;
-    startSynced      true;
-    refineBuffers    0;
+    updateTorque    true;
+    sdBasedLambda   false;
+    interfaceSpan   1;
+    startSynced     true;
+    refineBuffers   0;
     timesToSetStatic -1;
 }
 
