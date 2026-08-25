@@ -289,14 +289,19 @@ PH_SC_prefill
             {
             }
 
-            // Fast deterministic exact-count packing. nearest rounding is
-            // hard-coded and intentionally has no dictionary option.
-            packingStrategy       hybridLattice;
-            clearanceScale        1.0;
-            maxConsecutiveFailures 10000;
-            maxTotalAttempts       100000;
-            reportEveryAccepted    1;
-            randomSeed             12345;
+            // Full-size continuous random packing.  A complete pose plan is
+            // constructed before any immersed body is registered.  Search
+            // stagnation triggers bounded local pose reconstruction; it does
+            // not accept an underfilled state or fall back to a lattice.
+            packingStrategy          continuousRandomBacktracking;
+            clearanceScale           1.0;
+            stagnationWindow         20000;
+            localRepackAttempts      200000;
+            minLocalRepackBodies     4;
+            maxLocalRepackBodies     16;
+            maxPlannerRestarts       3;
+            reportEveryAccepted      100;
+            randomSeed               12345;
         }
     }
 
@@ -335,12 +340,25 @@ PH_SC_inlet
 
     bodyAddition
     {
-        // Maintain phi = 0.20 only in the upper 10 mm source slab.
+        // Maintain phi = 0.30 only in the upper 10 mm control slab.
         addModel repeatRandomPosition;
 
         repeatRandomPositionCoeffs
         {
             startAfterTime 0;
+
+            // Generate the new particle at its final size.  yMin is the
+            // internal lower face of the control slab, not a physical wall;
+            // the particle centre remains in the slab but its support may
+            // extend below that face.
+            placementStrategy                 continuousExact;
+            clearanceScale                    1.0;
+            insertionMinBound                 (-0.020 0.065 -0.020);
+            insertionMaxBound                 ( 0.020 0.075  0.020);
+            nonContainingFaces                (yMin);
+            maxCandidateAttemptsPerTimeStep   256;
+            candidateBatchSize                32;
+            randomSeed                        54321;
 
             addMode fieldBased;
             fieldBasedCoeffs
