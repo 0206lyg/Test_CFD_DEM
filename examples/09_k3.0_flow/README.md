@@ -8,23 +8,23 @@ downward reservoir inlet velocity of 5 mm/s.
 
 - Upstream reservoir: 40 mm x 40 mm, y = 25--75 mm
 - Downstream throat: 10 mm x 10 mm, y = 0--25 mm
-- Unscaled particle volume: 2.0279e-8 m3
-- Volume-equivalent particle diameter: 3.383 mm
-- Opening ratio: k = 10/3.383 = 2.96
+- Default sphere radius: 1.66667 mm
+- Default sphere volume: 1.93927e-8 m3
+- Opening ratio: k = 10/3.33334 = 3.00
 - Eulerian mesh spacing: 1 mm (82,500 cells)
 - Water: rho = 1000 kg/m3, nu = 1e-6 m2/s
 - Gravity: zero, so this case isolates liquid driving
 - Inlet velocity: `(0 -0.005 0)` m/s
 - Fixed outlet gauge pressure: zero
-- Initial and inlet solid volume fraction: 0.20
+- Initial and inlet target solid volume fraction: 0.30
 
 The inlet area is 1.6e-3 m2, so the imposed bulk flow is 8e-6 m3/s
 (8 mL/s).  The clean-flow mean throat velocity is 0.08 m/s.  With no mean
 particle slip and no clogging, the nominal particle flux is
 
 ```text
-Ndot = phi A U / Vp = 78.90 particles/s
-     = 4,734 particles/min = 284,038 particles/hour.
+Ndot = phi A U / Vp = 123.76 particles/s
+     = 7,425 particles/min = 445,529 particles/hour.
 ```
 
 This is a reference flux, not a prescribed particle count.  The measured exit
@@ -32,27 +32,41 @@ rate can differ because of slip, accumulation and clogging.
 
 ## Initial fill and inlet replenishment
 
-Two existing body-addition models are used with identical STL geometry:
+Two existing body-addition models are used; the placement algorithms remain
+inside those models and do not introduce a separate placement class:
 
-1. `PH_SC_prefill` uses `onceScatter + fieldBased` to fill the complete
-   upstream reservoir, y = 25--75 mm, to `lambda = 0.20` at t = 0 only.
+1. `PH_SC_prefill` uses `onceScatter + geometricVolumeBased` in the complete
+   upstream reservoir, y = 25--75 mm.  It converts phi = 0.30 to the nearest
+   integer count and constructs a complete, full-size, continuous-random pose
+   plan before registering any immersed body.  For the supplied sphere this is
+   1,238 particles and a realizable fraction of 0.300101.
 2. `PH_SC_inlet` uses `repeatRandomPosition + fieldBased` to maintain
-   `lambda = 0.20` in the upper 10 mm slab, y = 65--75 mm, during the run.
+   `lambda = 0.30` in the upper 10 mm control slab, y = 65--75 mm, after t = 0.
+   New particles are sampled at their final size and at continuous positions.
 
 `nSolidsInDomain 2000` is only a constructor-time safety ceiling.  It is not a
-request to insert 2,000 bodies: the field-based criterion stops the initial
-fill near 789 particles, with small discretization/local-source fluctuations.
-The global lambda/contact checks prevent the inlet source from overlapping the
-prefilled particles.  Runtime inlet replenishment is not limited by this
-constructor ceiling.
+request to insert 2,000 bodies.  Initial filling stops only after its exact
+nearest-count plan has been registered; runtime inlet replenishment is not
+limited by this constructor ceiling.
 
-Both sources use `uniformRandomRotation` and `startSynced true`, so initial
-orientations are isotropic and each accepted particle starts with its local
-fluid velocity.  Both retain the existing clock-seeded random-number behavior.
-`onceScatter` did not previously support the uniform orientation mode; the
-only library change in this overlay copies the already-developed Shoemake
-quaternion path from `repeatRandomPosition` to
-`src/HFDIBDEM/addModels/addModelOnceScatter.C`.
+The prefill planner uses broad-phase bins, AABB rejection and an exact sphere or
+convex-body overlap test.  If direct random placement stagnates, it removes a
+small conflict neighbourhood only in the in-memory pose plan and atomically
+rebuilds that neighbourhood.  Failed rebuilds roll back without touching body
+IDs, contact history, Verlet lists or solver fields.  There is no lattice
+fallback, temporary particle shrinking, particle growth or underfilled exit.
+
+The inlet rebuilds its broad-phase index from the moving bodies, checks a
+bounded batch of full-size candidates, and retains the framework contact test
+as the final wall/mixed-geometry guard.  Exhausting the per-time-step proposal
+budget defers insertion to the next time step; it never reduces particle size.
+`nonContainingFaces (yMin)` treats the slab's lower face as an internal control
+surface: the particle centre remains at or above y = 65 mm while its support
+may extend below it.  The other faces contain the complete rotated particle.
+
+Both sources use `uniformRandomRotation` and `startSynced true`, so orientations
+are isotropic and each accepted particle starts with its local fluid velocity.
+Explicit dictionary seeds make placement reproducible and MPI-consistent.
 
 ## Time integration and startup
 
@@ -127,16 +141,17 @@ The script writes:
 
 The final no-exit interval is right-censored: it is the observed lower bound on
 the arrest time, not proof of a permanent clog.  As an initial scale only,
-`d_v/U_throat = 0.003383/0.08 = 0.0423 s`; production analysis should determine
+`d/U_throat = 0.003333/0.08 = 0.0417 s`; production analysis should determine
 `dt_c` consistently for every shape, for example from the lower edge of the
 power-law tail of the inter-exit-time survival distribution.  Never tune the
 threshold separately to favor one particle shape.
 
 ## Build and run
 
-The overlay changes one HFDIB-DEM library implementation file.  Rebuild only
-the shared library from the repository root; the solver ABI is unchanged, so
-`pimpleLYJHFDIBFoam` does not need to be rebuilt:
+The overlay changes the existing `onceScatter` and `repeatRandomPosition`
+headers and implementations, plus this case dictionary and README.  It adds no
+new source file and does not change `Make/files`.  Rebuild the shared library
+from the repository root; the solver does not need to be rebuilt:
 
 ```sh
 (cd src/HFDIBDEM && wmake libso)
@@ -147,7 +162,7 @@ Then run from this case directory:
 ```sh
 ./Allrun
 python3 binParticleExit.py
-python3 analyzeAvalanches.py 0.0423
+python3 analyzeAvalanches.py 0.0417
 ```
 
 Use `./Allclean` before an independent realization.  The supplied analysis
