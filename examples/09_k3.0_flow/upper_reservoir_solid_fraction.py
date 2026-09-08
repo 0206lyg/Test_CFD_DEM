@@ -7,16 +7,30 @@ The physical geometry is fixed to the current examples/08 and examples/09:
     y    =  0.025 ... 0.075 m
 
 The reservoir is divided uniformly along y.  A particle contributes its full
-volume to the single bin containing its center.  Sphere centers/radii are read
-from body*.info.  For STL bodies, the center is the arithmetic mean of the
+volume to the single bin containing its center.  Input snapshots are
+particleData/<time>.bin files written by compress_bodiesInfo.py (binary v1).
+The original body*.info and STL bytes are read directly inside each .bin,
+without extracting files. Sphere centers/radii come from body*.info.
+For STL bodies, the center is the arithmetic mean of the
 unique STL vertices, matching openHFDIB-DEM's stlBased::getCoM().
 
-Only the Python standard library is required.
+The existing parsing, calculation order, options, and .dat format are retained.
+In particular, STL volumes are calculated with the original sequential sum;
+the converter's cached volume uses a different floating-point summation order.
+The legacy source=auto_detected_from_bodiesInfo output label is also retained.
+--settle-seconds uses the archived original file/directory modification times;
+the .bin file itself is additionally checked for changes while being read.
+
+Only the Python standard library is required. This script is standalone:
+compress_bodiesInfo.py does not need to be installed or imported to run it.
 """
 
 from __future__ import annotations
 
 import argparse
+import fnmatch
+import hashlib
+import json
 import math
 import os
 import re
@@ -67,7 +81,134 @@ REQUIRED_INFO_PATTERNS = (
 
 
 class SnapshotError(RuntimeError):
-    """A bodiesInfo time directory is incomplete or malformed."""
+    """A particleData snapshot or its original contents are incomplete/malformed."""
+
+
+class BinarySnapshot:
+    """Read only the original streams needed by the unchanged calculation.
+
+    The converter's JSON index and each consumed original file are checked
+    using SHA-256. Unrelated cached arrays and extra original files are not
+    read. Physical files are never extracted or created by this reader.
+    """
+    HEADER = struct.Struct("<16sI")
+    FOOTER = struct.Struct("<16sQQ32s")
+
+    def __init__(self, path: Path):
+        self.path = path
+
+    def __enter__(self):
+        self.stream = self.path.open("rb")
+        try:
+            self._read_index()
+        except BaseException:
+            self.stream.close()
+            raise
+        return self
+
+    def __exit__(self, *args):
+        self.stream.close()
+
+    @staticmethod
+    def _relative_name(name, directory=False):
+        if not isinstance(name, str):
+            raise SnapshotError("invalid original path in binary index")
+        if directory and name == "":
+            return name
+        if (not name or "\\" in name or ":" in name or "\0" in name
+                or any(p in ("", ".", "..") for p in name.split("/"))):
+            raise SnapshotError(f"invalid original path in binary index: {name!r}")
+        return name
+
+    def _read_index(self):
+        file_size = self.stream.seek(0, os.SEEK_END)
+        if file_size < self.HEADER.size + self.FOOTER.size:
+            raise SnapshotError(f"truncated binary snapshot: {self.path}")
+        self.stream.seek(0)
+        if self.HEADER.unpack(self.stream.read(self.HEADER.size)) != (b"PDBIN-HEADER-v1!", 1):
+            raise SnapshotError(f"unsupported binary snapshot: {self.path}")
+        self.stream.seek(-self.FOOTER.size, os.SEEK_END)
+        magic, offset, length, checksum = self.FOOTER.unpack(self.stream.read(self.FOOTER.size))
+        if (magic != b"PDBIN-FOOTER-v1!" or offset < self.HEADER.size
+                or offset + length != file_size - self.FOOTER.size):
+            raise SnapshotError(f"invalid or truncated binary index: {self.path}")
+        self.stream.seek(offset)
+        payload = self.stream.read(length)
+        if hashlib.sha256(payload).digest() != checksum:
+            raise SnapshotError(f"binary index checksum mismatch: {self.path}")
+        index = json.loads(payload)
+        if (not isinstance(index, dict)
+                or index.get("format") != "openHFDIB-DEM particleData binary"
+                or index.get("schema_version") != 1
+                or index.get("compression") != "none"
+                or index.get("time_name") != self.path.stem):
+            raise SnapshotError(f"binary schema or time-name mismatch: {self.path}")
+        original = index["original"]
+        raw = index["datasets"]["original/data"]
+        if (type(raw["offset"]) is not int or type(raw["size"]) is not int
+                or raw["offset"] < self.HEADER.size or raw["size"] < 0
+                or raw["offset"] + raw["size"] > offset
+                or raw["dtype"] != "u1" or raw["shape"] != [raw["size"]]):
+            raise SnapshotError(f"invalid original-data byte range: {self.path}")
+        self.raw_offset = raw["offset"]
+        self.files = {}
+        end = 0
+        for item in original["files"]:
+            name = self._relative_name(item["path"])
+            if (name in self.files or type(item["start"]) is not int
+                    or item["start"] != end or type(item["size"]) is not int
+                    or item["size"] < 0 or type(item["mtime_ns"]) is not int
+                    or re.fullmatch(r"[0-9a-f]{64}", item["sha256"]) is None):
+                raise SnapshotError(f"invalid original-file record: {self.path}")
+            self.files[name] = item
+            end += item["size"]
+        if end != raw["size"]:
+            raise SnapshotError(f"original-file sizes do not match data: {self.path}")
+        self.directories = {}
+        for item in original["directories"]:
+            name = self._relative_name(item["path"], directory=True)
+            if (name in self.directories or name in self.files
+                    or type(item["mtime_ns"]) is not int):
+                raise SnapshotError(f"invalid original-directory record: {self.path}")
+            self.directories[name] = item
+        if "" not in self.directories:
+            raise SnapshotError(f"missing original snapshot directory: {self.path}")
+        self.names = set(self.files) | set(self.directories)
+        for name in self.names - {""}:
+            parent = name.rsplit("/", 1)[0] if "/" in name else ""
+            if parent not in self.directories:
+                raise SnapshotError(f"missing original parent directory for {name}")
+
+    def glob(self, parent: str, pattern: str) -> list[str]:
+        prefix = parent + "/" if parent else ""
+        return sorted(name for name in self.names
+                      if name.startswith(prefix) and name[len(prefix):]
+                      and "/" not in name[len(prefix):]
+                      and fnmatch.fnmatchcase(name[len(prefix):], pattern))
+
+    def original_signature(self) -> tuple[tuple[str, int, int], ...]:
+        names = [""]
+        if "stlFiles" in self.names:
+            names.append("stlFiles")
+        names.extend(self.glob("", "body*.info"))
+        if "stlFiles" in self.directories:
+            names.extend(self.glob("stlFiles", "*.stl"))
+        signature = []
+        for name in names:
+            record = self.files.get(name, self.directories.get(name))
+            signature.append((name, record.get("size", 0), record["mtime_ns"]))
+        return tuple(signature)
+
+    def read_bytes(self, name: str) -> bytes:
+        if name not in self.files:
+            raise SnapshotError(f"missing original file {name} in {self.path}")
+        item = self.files[name]
+        self.stream.seek(self.raw_offset + item["start"])
+        data = self.stream.read(item["size"])
+        if (len(data) != item["size"]
+                or hashlib.sha256(data).hexdigest() != item["sha256"]):
+            raise SnapshotError(f"original-file checksum mismatch: {self.path}/{name}")
+        return data
 
 
 def positive_float(value: str) -> float:
@@ -139,7 +280,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--live",
         action="store_true",
         help=(
-            "conservatively skip the newest bodiesInfo time directory; use "
+            "conservatively skip the newest particleData time snapshot; use "
             "while the solver is running"
         ),
     )
@@ -148,7 +289,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=nonnegative_float,
         default=2.0,
         help=(
-            "skip a snapshot whose files changed more recently than this "
+            "skip a snapshot whose original files changed more recently than this "
             "wall-clock interval (default: 2)"
         ),
     )
@@ -164,7 +305,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def numeric_time_directories(root: Path) -> list[tuple[float, Path]]:
+def numeric_time_files(root: Path) -> list[tuple[float, Path]]:
     result: list[tuple[float, Path]] = []
     try:
         entries = list(root.iterdir())
@@ -172,10 +313,10 @@ def numeric_time_directories(root: Path) -> list[tuple[float, Path]]:
         raise SystemExit(f"ERROR: cannot read {root}: {exc}") from exc
 
     for entry in entries:
-        if not entry.is_dir():
+        if not entry.is_file() or entry.suffix != ".bin":
             continue
         try:
-            value = float(entry.name)
+            value = float(entry.stem)
         except ValueError:
             continue
         if math.isfinite(value):
@@ -184,26 +325,14 @@ def numeric_time_directories(root: Path) -> list[tuple[float, Path]]:
     return result
 
 
-def snapshot_signature(directory: Path) -> tuple[tuple[str, int, int], ...]:
-    """Return names, sizes and mtimes for files relevant to one snapshot."""
-    paths = [directory]
-    stl_directory = directory / "stlFiles"
-    if stl_directory.exists():
-        paths.append(stl_directory)
-    paths.extend(sorted(directory.glob("body*.info"), key=lambda path: path.name))
-    if stl_directory.is_dir():
-        paths.extend(sorted(stl_directory.glob("*.stl"), key=lambda path: path.name))
-
-    signature: list[tuple[str, int, int]] = []
-    for path in paths:
-        try:
-            status = path.stat()
-        except OSError as exc:
-            raise SnapshotError(f"cannot stat {path}: {exc}") from exc
-        signature.append(
-            (str(path.relative_to(directory)), status.st_size, status.st_mtime_ns)
-        )
-    return tuple(signature)
+def snapshot_signature(path: Path) -> tuple[int, ...]:
+    """Detect physical .bin replacement or modification during a read."""
+    try:
+        status = path.stat()
+    except OSError as exc:
+        raise SnapshotError(f"cannot stat {path}: {exc}") from exc
+    return (status.st_dev, status.st_ino, status.st_size,
+            status.st_mtime_ns, status.st_ctime_ns)
 
 
 def require_settled(
@@ -232,9 +361,9 @@ def vector_from_text(value: str, source: Path) -> tuple[float, float, float]:
     return vector  # type: ignore[return-value]
 
 
-def read_body_info(path: Path) -> tuple[int, tuple[float, float, float] | None, float | None]:
+def read_body_info(path: Path, data: bytes) -> tuple[int, tuple[float, float, float] | None, float | None]:
     try:
-        text = path.read_text(encoding="utf-8")
+        text = data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
     except (OSError, UnicodeError) as exc:
         raise SnapshotError(f"cannot read {path}: {exc}") from exc
 
@@ -324,12 +453,7 @@ def determinant(
     )
 
 
-def read_stl_center_and_volume(path: Path) -> tuple[tuple[float, float, float], float]:
-    try:
-        data = path.read_bytes()
-    except OSError as exc:
-        raise SnapshotError(f"cannot read {path}: {exc}") from exc
-
+def read_stl_center_and_volume(path: Path, data: bytes) -> tuple[tuple[float, float, float], float]:
     triangles = binary_stl_triangles(data, path)
     if triangles is None:
         triangles = ascii_stl_triangles(data, path)
@@ -377,55 +501,63 @@ def particle_bin(center: tuple[float, float, float], bins: int) -> int | None:
 
 
 def parse_snapshot(
-    directory: Path, bins: int, settle_seconds: float
+    archive: Path, bins: int, settle_seconds: float
 ) -> tuple[list[int], list[float]]:
-    before = snapshot_signature(directory)
-    require_settled(before, settle_seconds)
+    before = snapshot_signature(archive)
+    try:
+        with BinarySnapshot(archive) as source:
+            require_settled(source.original_signature(), settle_seconds)
+            if "stlFiles" not in source.directories:
+                raise SnapshotError(f"missing original stlFiles directory in {archive}")
 
-    stl_directory = directory / "stlFiles"
-    if not stl_directory.is_dir():
-        raise SnapshotError(f"missing stlFiles directory in {directory}")
+            info_files: list[tuple[int, str]] = []
+            for name in source.glob("", "body*.info"):
+                match = BODY_FILE_RE.match(name)
+                if match is None:
+                    raise SnapshotError(f"unexpected body-info filename: {archive}/{name}")
+                info_files.append((int(match.group(1)), name))
+            info_files.sort(key=lambda item: item[0])
 
-    info_files: list[tuple[int, Path]] = []
-    for path in directory.glob("body*.info"):
-        match = BODY_FILE_RE.match(path.name)
-        if match is None:
-            raise SnapshotError(f"unexpected body-info filename: {path}")
-        info_files.append((int(match.group(1)), path))
-    info_files.sort(key=lambda item: item[0])
+            bin_counts = [0] * bins
+            detected_volumes: list[float] = []
+            expected_stl_names: set[str] = set()
+            for filename_id, name in info_files:
+                info_path = archive / name
+                body_id, sphere_center, sphere_volume = read_body_info(info_path, source.read_bytes(name))
+                if body_id != filename_id:
+                    raise SnapshotError(f"bodyId mismatch in {info_path}")
 
-    bin_counts = [0] * bins
-    detected_volumes: list[float] = []
-    expected_stl_names: set[str] = set()
-    for filename_id, info_path in info_files:
-        body_id, sphere_center, sphere_volume = read_body_info(info_path)
-        if body_id != filename_id:
-            raise SnapshotError(f"bodyId mismatch in {info_path}")
+                if sphere_center is not None and sphere_volume is not None:
+                    center, volume = sphere_center, sphere_volume
+                else:
+                    stl_name = f"{body_id}.stl"
+                    expected_stl_names.add(stl_name)
+                    stored_name = "stlFiles/" + stl_name
+                    if stored_name not in source.files:
+                        raise SnapshotError(f"missing companion STL for {info_path}")
+                    center, volume = read_stl_center_and_volume(
+                        archive / stored_name, source.read_bytes(stored_name)
+                    )
 
-        if sphere_center is not None and sphere_volume is not None:
-            center, volume = sphere_center, sphere_volume
-        else:
-            stl_name = f"{body_id}.stl"
-            expected_stl_names.add(stl_name)
-            stl_path = stl_directory / stl_name
-            if not stl_path.is_file():
-                raise SnapshotError(f"missing companion STL for {info_path}")
-            center, volume = read_stl_center_and_volume(stl_path)
+                detected_volumes.append(volume)
+                index = particle_bin(center, bins)
+                if index is not None:
+                    bin_counts[index] += 1
 
-        detected_volumes.append(volume)
-        index = particle_bin(center, bins)
-        if index is not None:
-            bin_counts[index] += 1
+            actual_stl_names = {Path(name).name for name in source.glob("stlFiles", "*.stl")}
+            if actual_stl_names != expected_stl_names:
+                raise SnapshotError(
+                    f"body-info/STL set mismatch in {archive}; snapshot may be incomplete"
+                )
+    except SnapshotError:
+        raise
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError, OverflowError,
+            struct.error, AttributeError) as exc:
+        raise SnapshotError(f"cannot read binary snapshot {archive}: {exc}") from exc
 
-    actual_stl_names = {path.name for path in stl_directory.glob("*.stl")}
-    if actual_stl_names != expected_stl_names:
-        raise SnapshotError(
-            f"body-info/STL set mismatch in {directory}; snapshot may be incomplete"
-        )
-
-    after = snapshot_signature(directory)
+    after = snapshot_signature(archive)
     if before != after:
-        raise SnapshotError(f"snapshot changed while it was being read: {directory}")
+        raise SnapshotError(f"snapshot changed while it was being read: {archive}")
     return bin_counts, detected_volumes
 
 
@@ -525,19 +657,19 @@ def write_output(
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = parse_args(argv)
     case_directory = Path(arguments.case).expanduser().resolve()
-    bodies_root = case_directory / "bodiesInfo"
+    bodies_root = case_directory / "particleData"
     if not bodies_root.is_dir():
-        print(f"ERROR: bodiesInfo directory not found: {bodies_root}", file=sys.stderr)
+        print(f"ERROR: particleData directory not found: {bodies_root}", file=sys.stderr)
         return 2
 
-    time_directories = numeric_time_directories(bodies_root)
+    time_directories = numeric_time_files(bodies_root)
     if not time_directories:
-        print(f"ERROR: no numeric time directories found in {bodies_root}", file=sys.stderr)
+        print(f"ERROR: no numeric .bin time snapshots found in {bodies_root}", file=sys.stderr)
         return 2
     for previous, current in zip(time_directories, time_directories[1:]):
         if previous[0] == current[0]:
             print(
-                "ERROR: duplicate numeric time value in bodiesInfo: "
+                "ERROR: duplicate numeric time value in particleData: "
                 f"{previous[1].name!r} and {current[1].name!r}",
                 file=sys.stderr,
             )

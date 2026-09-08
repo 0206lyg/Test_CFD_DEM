@@ -1,8 +1,147 @@
-#!/usr/bin/python3
-#ReadME: This script merges the stl files from the bodiesInfo/ directory into a single file in the STLMerged/ directory.
-#created by OStudenik 
+#!/usr/bin/env python3
+"""Merge particleData/<time>.bin snapshots into the original STLMerged outputs.
+
+Input: binary-v1 snapshots written by compress_bodiesInfo.py. Original .info
+and STL contents are read directly inside each .bin without extracting files.
+The existing merge logic, output names, time ordering, sphere VTP/PVD/PVSM
+writers, and rerun behavior are retained. STL merging keeps the original
+text/ASCII concatenation; the stored numerical geometry arrays are not used.
+
+Run from the case directory: python3 merge_STL_outputFiles.py
+Only the Python standard library is required; this script is standalone.
+"""
+# Original merge script created by OStudenik.
 import os
-import numpy # as np
+import io
+import hashlib
+import json
+import re
+import struct
+from pathlib import Path
+
+class SnapshotError(RuntimeError):
+    """A particleData snapshot or its original contents are incomplete/malformed."""
+
+
+class BinarySnapshot:
+    """Read original body-info and STL streams directly from one .bin.
+
+    The converter's JSON index and each consumed original file are checked
+    using SHA-256. Unrelated cached arrays and extra original files are not
+    read. Physical files are never extracted or created by this reader.
+    """
+    HEADER = struct.Struct("<16sI")
+    FOOTER = struct.Struct("<16sQQ32s")
+
+    def __init__(self, path: Path):
+        self.path = path
+
+    def __enter__(self):
+        self.stream = self.path.open("rb")
+        try:
+            self._read_index()
+        except BaseException:
+            self.stream.close()
+            raise
+        return self
+
+    def __exit__(self, *args):
+        self.stream.close()
+
+    @staticmethod
+    def _relative_name(name, directory=False):
+        if not isinstance(name, str):
+            raise SnapshotError("invalid original path in binary index")
+        if directory and name == "":
+            return name
+        if (not name or "\\" in name or ":" in name or "\0" in name
+                or any(p in ("", ".", "..") for p in name.split("/"))):
+            raise SnapshotError(f"invalid original path in binary index: {name!r}")
+        return name
+
+    def _read_index(self):
+        file_size = self.stream.seek(0, os.SEEK_END)
+        if file_size < self.HEADER.size + self.FOOTER.size:
+            raise SnapshotError(f"truncated binary snapshot: {self.path}")
+        self.stream.seek(0)
+        if self.HEADER.unpack(self.stream.read(self.HEADER.size)) != (b"PDBIN-HEADER-v1!", 1):
+            raise SnapshotError(f"unsupported binary snapshot: {self.path}")
+        self.stream.seek(-self.FOOTER.size, os.SEEK_END)
+        magic, offset, length, checksum = self.FOOTER.unpack(self.stream.read(self.FOOTER.size))
+        if (magic != b"PDBIN-FOOTER-v1!" or offset < self.HEADER.size
+                or offset + length != file_size - self.FOOTER.size):
+            raise SnapshotError(f"invalid or truncated binary index: {self.path}")
+        self.stream.seek(offset)
+        payload = self.stream.read(length)
+        if hashlib.sha256(payload).digest() != checksum:
+            raise SnapshotError(f"binary index checksum mismatch: {self.path}")
+        index = json.loads(payload)
+        if (not isinstance(index, dict)
+                or index.get("format") != "openHFDIB-DEM particleData binary"
+                or index.get("schema_version") != 1
+                or index.get("compression") != "none"
+                or index.get("time_name") != self.path.stem):
+            raise SnapshotError(f"binary schema or time-name mismatch: {self.path}")
+        original = index["original"]
+        raw = index["datasets"]["original/data"]
+        if (type(raw["offset"]) is not int or type(raw["size"]) is not int
+                or raw["offset"] < self.HEADER.size or raw["size"] < 0
+                or raw["offset"] + raw["size"] > offset
+                or raw["dtype"] != "u1" or raw["shape"] != [raw["size"]]):
+            raise SnapshotError(f"invalid original-data byte range: {self.path}")
+        self.raw_offset = raw["offset"]
+        self.files = {}
+        end = 0
+        for item in original["files"]:
+            name = self._relative_name(item["path"])
+            if (name in self.files or type(item["start"]) is not int
+                    or item["start"] != end or type(item["size"]) is not int
+                    or item["size"] < 0 or type(item["mtime_ns"]) is not int
+                    or re.fullmatch(r"[0-9a-f]{64}", item["sha256"]) is None):
+                raise SnapshotError(f"invalid original-file record: {self.path}")
+            self.files[name] = item
+            end += item["size"]
+        if end != raw["size"]:
+            raise SnapshotError(f"original-file sizes do not match data: {self.path}")
+        self.directories = {}
+        for item in original["directories"]:
+            name = self._relative_name(item["path"], directory=True)
+            if (name in self.directories or name in self.files
+                    or type(item["mtime_ns"]) is not int):
+                raise SnapshotError(f"invalid original-directory record: {self.path}")
+            self.directories[name] = item
+        if "" not in self.directories:
+            raise SnapshotError(f"missing original snapshot directory: {self.path}")
+        self.names = set(self.files) | set(self.directories)
+        for name in self.names - {""}:
+            parent = name.rsplit("/", 1)[0] if "/" in name else ""
+            if parent not in self.directories:
+                raise SnapshotError(f"missing original parent directory for {name}")
+
+    def listdir(self, parent=""):
+        if parent not in self.directories:
+            raise FileNotFoundError(f"missing original directory {parent} in {self.path}")
+        prefix = parent + "/" if parent else ""
+        return [name[len(prefix):] for name in self.names
+                if name.startswith(prefix) and name[len(prefix):]
+                and "/" not in name[len(prefix):]]
+
+    def open_text(self, name):
+        # Match open(path, 'r'): locale-default decoding and universal newlines.
+        return io.TextIOWrapper(io.BytesIO(self.read_bytes(name)))
+
+    def read_bytes(self, name: str) -> bytes:
+        if name not in self.files:
+            raise SnapshotError(f"missing original file {name} in {self.path}")
+        item = self.files[name]
+        self.stream.seek(self.raw_offset + item["start"])
+        data = self.stream.read(item["size"])
+        if (len(data) != item["size"]
+                or hashlib.sha256(data).hexdigest() != item["sha256"]):
+            raise SnapshotError(f"original-file checksum mismatch: {self.path}/{name}")
+        return data
+
+
 def canBeConvertedToFloat(input):
     try:
         float(input)
@@ -10,28 +149,35 @@ def canBeConvertedToFloat(input):
     except ValueError:
         return False
 
-def getParticles_List(caseDir):
-    "Returns a list with the particle numbers in the case directory."
-    Directory = caseDir
-    Strings   = list(set([numStr for numStr in os.listdir(Directory)]))
+def getParticles_List(source):
+    "Returns the particle numbers in the archived stlFiles directory."
+    Strings   = list(set(source.listdir('stlFiles')))
     Full_List = []
     for i in range(len(Strings)):
-        string_to_save = caseDir+'/'+Strings[i]
         if(Strings[i][-4:] == '.stl'):
                 Full_List.append(Strings[i][:-4])
     if(len(Full_List) > 0):            
         Full_List.sort(key = float)
     return Full_List 
 
-Full_List = os.listdir('bodiesInfo/')
+def _time_names():
+    return [name[:-4] for name in os.listdir('particleData/')
+            if name.endswith('.bin') and canBeConvertedToFloat(name[:-4])
+            and os.path.isfile('particleData/' + name)]
+
+
+def _snapshot(time_name):
+    return BinarySnapshot(Path('particleData') / (time_name + '.bin'))
+
+
+Full_List = _time_names()
 Full_List.sort(key = float)
 
 
-# Implicit-sphere extension.  The original STL path below is unchanged.
+# Implicit-sphere extension. The existing output logic below is unchanged.
 # A sphere timestep is stored as one compact point/radius VTP file.  ParaView
 # renders those points with one instanced Sphere source; no per-particle surface
 # triangles are written by this script.
-import re
 import xml.etree.ElementTree as ElementTree
 from xml.sax.saxutils import escape
 
@@ -44,14 +190,14 @@ _RADIUS = re.compile(r"\bradius\s+(" + _FLOAT + r")\s*;")
 
 def _recorded_stl_exists():
     for time_name in Full_List:
-        stl_path = 'bodiesInfo/' + time_name + '/stlFiles'
-        if os.path.isdir(stl_path) and len(getParticles_List(stl_path)) > 0:
-            return True
+        with _snapshot(time_name) as source:
+            if 'stlFiles' in source.directories and len(getParticles_List(source)) > 0:
+                return True
     return False
 
 
-def _read_sphere(info_path):
-    with open(info_path, 'r') as file:
+def _read_sphere(info_path, source):
+    with source.open_text(info_path) as file:
         text = file.read()
 
     sphere_match = _SPHERE_BLOCK.search(text)
@@ -355,17 +501,17 @@ def _merge_implicit_spheres():
             bounds = _merge_bounds(bounds, file_bounds)
             number_of_spheres += file_count
         else:
-            time_path = 'bodiesInfo/' + time_name
-            info_names = sorted(
-                name for name in os.listdir(time_path)
-                if name.startswith('body') and name.endswith('.info')
-            )
+            with _snapshot(time_name) as source:
+                info_names = sorted(
+                    name for name in source.listdir()
+                    if name.startswith('body') and name.endswith('.info')
+                )
 
-            spheres = []
-            for info_name in info_names:
-                sphere = _read_sphere(time_path + '/' + info_name)
-                if sphere is not None:
-                    spheres.append(sphere)
+                spheres = []
+                for info_name in info_names:
+                    sphere = _read_sphere(info_name, source)
+                    if sphere is not None:
+                        spheres.append(sphere)
 
             spheres.sort(key=lambda sphere: sphere[0])
             for sphere in spheres:
@@ -396,21 +542,22 @@ if(not (os.path.isdir('STLMerged'))):
     time_iter = 0
 
     for item in Full_List:
-        Full_List_II= getParticles_List('bodiesInfo/'+item+'/stlFiles')
-        time_iter += 1
-        for item_II in Full_List_II:
-            with open('bodiesInfo/'+item+'/stlFiles/'+item_II+'.stl', 'r') as file:
-                data = file.readlines()    
-            with open('STLMerged/STL_Results'+str(time_iter).zfill(4)+'.stl', 'a+') as file:
-                file.writelines('solid '+item_II+'.stl'+'\n')
-                for i in range(1, len(data) -1):
-                    file.writelines(data[i])
-                file.writelines('endsolid '+item_II+'\n')
+        with _snapshot(item) as source:
+            Full_List_II= getParticles_List(source)
+            time_iter += 1
+            for item_II in Full_List_II:
+                with source.open_text('stlFiles/'+item_II+'.stl') as file:
+                    data = file.readlines()
+                with open('STLMerged/STL_Results'+str(time_iter).zfill(4)+'.stl', 'a+') as file:
+                    file.writelines('solid '+item_II+'.stl'+'\n')
+                    for i in range(1, len(data) -1):
+                        file.writelines(data[i])
+                    file.writelines('endsolid '+item_II+'\n')
         print("-- Reading: ", item)
 
 elif(os.path.isdir('STLMerged')):
     reduced_list = os.listdir('STLMerged/')
-    reduced_list2 = os.listdir('bodiesInfo/')
+    reduced_list2 = _time_names()
     for item in reduced_list2:
         if canBeConvertedToFloat(item):
             if(float(item) == int(float(item))):
@@ -427,14 +574,15 @@ elif(os.path.isdir('STLMerged')):
     print(reduced_list2[len(reduced_list):])
 
     for item in reduced_list2[len(reduced_list):]:
-        Full_List_II= getParticles_List('bodiesInfo/'+item+'/stlFiles')
-        time_iter += 1
-        for item_II in Full_List_II:
-            with open('bodiesInfo/'+item+'/stlFiles/'+item_II+'.stl', 'r') as file:
-                data = file.readlines()    
-            with open('STLMerged/STL_Results'+str(time_iter).zfill(4)+'.stl', 'a+') as file:
-                file.writelines('solid '+item_II+'.stl'+'\n')
-                for i in range(1, len(data) -1):
-                    file.writelines(data[i])
-                file.writelines('endsolid '+item_II+'\n')
+        with _snapshot(item) as source:
+            Full_List_II= getParticles_List(source)
+            time_iter += 1
+            for item_II in Full_List_II:
+                with source.open_text('stlFiles/'+item_II+'.stl') as file:
+                    data = file.readlines()
+                with open('STLMerged/STL_Results'+str(time_iter).zfill(4)+'.stl', 'a+') as file:
+                    file.writelines('solid '+item_II+'.stl'+'\n')
+                    for i in range(1, len(data) -1):
+                        file.writelines(data[i])
+                    file.writelines('endsolid '+item_II+'\n')
         print("-- Reading: ", item)
