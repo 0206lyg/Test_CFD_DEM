@@ -1566,10 +1566,179 @@ void openHFDIBDEM::interpolateIB( volVectorField & V
     }
 }
 //---------------------------------------------------------------------------//
+void openHFDIBDEM::collectContactOutput
+(
+    List<dictionary>& particleContacts,
+    List<dictionary>& wallContacts
+)
+{
+    // Only the rank that solved a contact owns its final substep data.
+    // Communicate individual contacts at output times, not at every DEM step.
+    // IDs are body-list indices internally; exported partner IDs are bodyIds.
+    DynamicLabelList localIds;
+    DynamicVectorList localValues;
+    const label myProc = Pstream::myProcNo();
+
+    // A historical table entry can survive removal from the Verlet list.
+    // Follow exactly the active pair set evaluated in the last DEM substep.
+    for (auto iter = verletList_.begin(); iter != verletList_.end(); ++iter)
+    {
+        const Tuple2<label, label> pair(iter->first, iter->second);
+        if
+        (
+            !prtcInfoTable_.found(pair)
+         || !immersedBodies_[pair.first()].getIsActive()
+         || !immersedBodies_[pair.second()].getIsActive()
+         ||
+            (
+                immersedBodies_[pair.first()].getbodyOperation() == 0
+             && immersedBodies_[pair.second()].getbodyOperation() == 0
+            )
+        )
+        {
+            continue;
+        }
+        const unsigned pairHash = Hash<Tuple2<label, label>>()(pair);
+        if (label(pairHash % unsigned(Pstream::nProcs())) != myProc)
+        {
+            continue;
+        }
+
+        prtContactInfo& contactInfo = prtcInfoTable_[pair]();
+        for (const auto& contact : contactInfo.getPrtSCList())
+        {
+            if (!contact->getContactResolved())
+            {
+                continue;
+            }
+            localIds.append(pair.first());
+            localIds.append(pair.second());
+            localValues.append(contact->getNormalForce());
+            localValues.append(contact->getTangentialForce());
+            // The third vector keeps a common MPI record layout. Particle
+            // contact points are not added to the requested output schema.
+            localValues.append(vector::zero);
+        }
+    }
+
+    forAll(immersedBodies_, bodyIndex)
+    {
+        immersedBody& body = immersedBodies_[bodyIndex];
+        if
+        (
+            !body.getIsActive()
+         || body.getbodyOperation() == 0
+         || body.getBodyId() % Pstream::nProcs() != myProc
+        )
+        {
+            continue;
+        }
+        for (const auto& contact : body.getWallCntInfo().getWallSCList())
+        {
+            if (!contact->getContactResolved())
+            {
+                continue;
+            }
+            localIds.append(bodyIndex);
+            localIds.append(-1);
+            localValues.append(contact->getNormalForce());
+            localValues.append(contact->getTangentialForce());
+            localValues.append(contact->getWallCntVars().contactCenter_);
+        }
+    }
+
+    List<labelList> rankIds(Pstream::nProcs());
+    List<vectorField> rankValues(Pstream::nProcs());
+    rankIds[myProc] = localIds;
+    rankValues[myProc] = localValues;
+    Pstream::gatherList(rankIds);
+    Pstream::scatterList(rankIds);
+    Pstream::gatherList(rankValues);
+    Pstream::scatterList(rankValues);
+
+    labelList particleCounts(immersedBodies_.size(), 0);
+    labelList wallCounts(immersedBodies_.size(), 0);
+    forAll(rankIds, proc)
+    {
+        const labelList& ids = rankIds[proc];
+        const vectorField& values = rankValues[proc];
+        if (ids.size() % 2 || values.size() != 3*(ids.size()/2))
+        {
+            FatalErrorInFunction
+                << "Inconsistent contact output received from rank " << proc
+                << exit(FatalError);
+        }
+        for (label record = 0; record < ids.size()/2; ++record)
+        {
+            const label first = ids[2*record];
+            const label second = ids[2*record + 1];
+            if
+            (
+                first < 0 || first >= immersedBodies_.size()
+             || second < -1 || second >= immersedBodies_.size()
+             || second == first
+            )
+            {
+                FatalErrorInFunction
+                    << "Invalid body indices in contact output: "
+                    << first << ' ' << second << exit(FatalError);
+            }
+            const vector& normal = values[3*record];
+            const vector& tangential = values[3*record + 1];
+
+            if (second == -1)
+            {
+                dictionary entry;
+                entry.add("contactPoint", values[3*record + 2]);
+                entry.add("normalForce", normal);
+                entry.add("tangentialForce", tangential);
+                wallContacts[first].add
+                (
+                    word("contact" + std::to_string(wallCounts[first]++)),
+                    entry
+                );
+            }
+            else
+            {
+                // Each body's file contains the force ON that body. Keep
+                // both endpoint records, including contacts to static bodies.
+                dictionary firstEntry;
+                firstEntry.add("partnerId", immersedBodies_[second].getBodyId());
+                firstEntry.add("normalForce", normal);
+                firstEntry.add("tangentialForce", tangential);
+                particleContacts[first].add
+                (
+                    word("contact" + std::to_string(particleCounts[first]++)),
+                    firstEntry
+                );
+
+                dictionary secondEntry;
+                secondEntry.add("partnerId", immersedBodies_[first].getBodyId());
+                secondEntry.add("normalForce", -normal);
+                secondEntry.add("tangentialForce", -tangential);
+                particleContacts[second].add
+                (
+                    word("contact" + std::to_string(particleCounts[second]++)),
+                    secondEntry
+                );
+            }
+        }
+    }
+}
+//---------------------------------------------------------------------------//
 void openHFDIBDEM::writeBodiesInfo()
 {
     if(!recordSimulation_)
         return;
+
+    const bool forceDataAvailable =
+        forceSnapshotTimeIndex_ == mesh_.time().timeIndex();
+    List<dictionary> particleContacts(immersedBodies_.size());
+    List<dictionary> wallContacts(immersedBodies_.size());
+    if (forceDataAvailable)
+    {
+        collectContactOutput(particleContacts, wallContacts);
+    }
 
     word curOutDir(recordOutDir_ + "/" + mesh_.time().timeName());
 
@@ -1607,7 +1776,12 @@ void openHFDIBDEM::writeBodiesInfo()
         IOdictionary outDict(outClass);
 
         outDict.writeHeader(ofStream);
-        immersedBodies_[bodyId].recordBodyInfo(outDict,curOutDir);
+        immersedBodies_[bodyId].recordBodyInfo
+        (
+            outDict, curOutDir, forceDataAvailable
+        );
+        outDict.set("particleContacts", particleContacts[bodyId]);
+        outDict.set("wallContacts", wallContacts[bodyId]);
         outDict.writeData(ofStream);
     }
 
@@ -1615,6 +1789,7 @@ void openHFDIBDEM::writeBodiesInfo()
 //---------------------------------------------------------------------------//
 void openHFDIBDEM::updateDEM(volScalarField& body,volScalarField& refineF)
 {
+    forceSnapshotTimeIndex_ = -1;
     if (cyclicPlaneInfo::getCyclicPlaneInfo().size() > 0)
     {
         forAll (immersedBodies_,bodyId)
@@ -2127,6 +2302,7 @@ void openHFDIBDEM::updateDEM(volScalarField& body,volScalarField& refineF)
     }
 
     setMovingWallsAtFraction(1.0);
+    forceSnapshotTimeIndex_ = mesh_.time().timeIndex();
 
     if (movingWallNames.size() > 0)
     {

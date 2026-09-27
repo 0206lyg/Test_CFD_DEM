@@ -89,6 +89,11 @@ class wallSubContactInfo
 
     forces outForce_; // Out variable for force
 
+    // Components applied to this body in the latest force solve.
+    // The normal component includes clipped damping, but excludes adhesion.
+    vector normalForce_ = vector::zero;
+    vector tangentialForce_ = vector::zero;
+
     List<autoPtr<virtualMeshWallInfo>> vmWInfoList_; 
 
     List<autoPtr<virtualMeshWallInfo>> vmPlaneInfoList_;
@@ -181,12 +186,38 @@ class wallSubContactInfo
         return outForce_;
     }
 
+    const vector& getNormalForce() const
+    {
+        return normalForce_;
+    }
+
+    const vector& getTangentialForce() const
+    {
+        return tangentialForce_;
+    }
+
+    void setContactForces(const vector& normal, const vector& tangential)
+    {
+        normalForce_ = normal;
+        tangentialForce_ = tangential;
+    }
+
+    void clearContactForces()
+    {
+        normalForce_ = vector::zero;
+        tangentialForce_ = vector::zero;
+    }
+
     void setResolvedContact(bool resolved)
     {
         contactResolved_ = resolved;
+        if (!resolved)
+        {
+            clearContactForces();
+        }
     }
 
-    bool getContactResolved()
+    bool getContactResolved() const
     {
         return contactResolved_;
     }

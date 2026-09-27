@@ -478,7 +478,12 @@ void recreateBodyFieldDynamic
             return wallCntInfo_();
         }
 
-        void recordBodyInfo(IOdictionary& dict, word path)
+        void recordBodyInfo
+        (
+            IOdictionary& dict,
+            word path,
+            const bool forceDataAvailable = false
+        )
         {
             dict.add("bodyId",bodyId_);
             dict.add("bodyName",bodyName_);
@@ -488,6 +493,13 @@ void recreateBodyFieldDynamic
             dict.add("static",bodyOperation_ == 0);
             dict.add("timeStepsInContWStatic", ibContactClass_
                 ->getTimeStepsInContWStatic());
+            // These are the fluid loads used by the integrator (N and N m),
+            // not the sum of fluid, contact and gravitational contributions.
+            dict.add("fluidForce", FCoupling_.F);
+            dict.add("fluidTorque", FCoupling_.T);
+            dict.add("forceDataAvailable", forceDataAvailable);
+            dict.add("particleContacts", dictionary());
+            dict.add("wallContacts", dictionary());
             geomModel_->writeBodyInfo(bodyId_,dict, path);
         }
 

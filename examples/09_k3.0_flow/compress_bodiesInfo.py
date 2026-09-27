@@ -47,6 +47,33 @@ Schema (SI units):
     geometry/triangle_offsets        uint64 [N+1]
     original/data                    byte [B], exact original file contents
 
+Optional force arrays (present when any body has the new force output fields):
+    particles/fluid_force            float64 [N,3], N
+    particles/fluid_torque           float64 [N,3], N m
+    particles/force_data_available   uint8 [N]: 0=unavailable, 1=solver snapshot
+    contacts/particle_offsets        uint64 [N+1]
+    contacts/particle_partner_id     int64 [P]
+    contacts/particle_normal_force   float64 [P,3], N
+    contacts/particle_tangential_force float64 [P,3], N
+    contacts/wall_offsets            uint64 [N+1]
+    contacts/wall_contact_point      float64 [W,3], m
+    contacts/wall_normal_force       float64 [W,3], N
+    contacts/wall_tangential_force   float64 [W,3], N
+
+Particle i owns contact rows offsets[i]:offsets[i+1] in each contact table.
+All force vectors act ON the owning particle. Particle-particle contacts are
+recorded at both ends; do not count both rows as separate physical contacts.
+One partner can appear more than once when the solver has multiple subcontacts.
+An empty contact range means no evaluated contact only if availability is 1.
+Legacy .info records have no force fields. Legacy-only snapshots retain the
+original array schema; mixed snapshots store availability=0 and NaN fluid
+vectors for those records. Explicit unavailable output retains its recorded
+vectors but must not be interpreted as an evaluated zero force. Older .bin
+files remain readable and exact original bytes are preserved in all cases.
+Fluid loads are the integrator's FCoupling values, held through DEM substeps;
+buoyancy is handled separately by the solver's effective gravity. Contact
+normal forces include clipped damping and exclude the separate adhesion term.
+
 Particle i has triangles[offsets[i]:offsets[i+1]]. The binary index lists
 original filenames and byte ranges, modes, timestamps and empty directories.
 Use read_original(name) for a particular original file, or verify() to check
@@ -192,6 +219,51 @@ def _info_vector(entries, key, name):
     return result
 
 
+def _parse_force_info(entries, name, body_id):
+    fields = ("fluidForce", "fluidTorque", "forceDataAvailable",
+              "particleContacts", "wallContacts")
+    present = [field in entries for field in fields]
+    result = {"has_force_fields": any(present), "force_data_available": 0,
+              "fluid_force": (float("nan"),) * 3,
+              "fluid_torque": (float("nan"),) * 3,
+              "particle_contacts": [], "wall_contacts": []}
+    if not any(present):
+        return result
+    if not all(present):
+        missing = ", ".join(field for field in fields if field not in entries)
+        raise ParticleParseError(f"{name}: incomplete force output; missing {missing}")
+    flag = _info_scalar(entries, "forceDataAvailable", name).lower()
+    bools = {"0": 0, "false": 0, "no": 0, "off": 0,
+             "1": 1, "true": 1, "yes": 1, "on": 1}
+    if flag not in bools:
+        raise ParticleParseError(f"{name}: invalid forceDataAvailable flag {flag!r}")
+    result["force_data_available"] = bools[flag]
+    result["fluid_force"] = _info_vector(entries, "fluidForce", name)
+    result["fluid_torque"] = _info_vector(entries, "fluidTorque", name)
+    for field, key in (("particleContacts", "particle_contacts"),
+                       ("wallContacts", "wall_contacts")):
+        contacts = entries[field]
+        if not isinstance(contacts, dict):
+            raise ParticleParseError(f"{name}: invalid {field} dictionary")
+        for contact_name, contact in contacts.items():
+            context = f"{name}/{field}/{contact_name}"
+            if not isinstance(contact, dict):
+                raise ParticleParseError(f"{context}: expected contact dictionary")
+            record = {"normal_force": _info_vector(contact, "normalForce", context),
+                      "tangential_force": _info_vector(contact, "tangentialForce", context)}
+            if field == "particleContacts":
+                record["partner_id"] = _info_int(contact, "partnerId", context)
+                if record["partner_id"] == body_id:
+                    raise ParticleParseError(f"{context}: particle cannot contact itself")
+            else:
+                record["contact_point"] = _info_vector(contact, "contactPoint", context)
+            result[key].append(record)
+    if not result["force_data_available"] and (result["particle_contacts"]
+                                               or result["wall_contacts"]):
+        raise ParticleParseError(f"{name}: unavailable force output has contact records")
+    return result
+
+
 def parse_particle_info(data: bytes, name: str) -> dict:
     """Parse the numeric particle fields; original bytes are preserved elsewhere."""
     entries, _ = _foam_dictionary(_foam_tokens(data, name), name)
@@ -220,6 +292,7 @@ def parse_particle_info(data: bytes, name: str) -> dict:
         "sphere_center": None,
         "radius": None,
     }
+    result.update(_parse_force_info(entries, name, body_id))
     if "sphere" in entries:
         sphere = entries["sphere"]
         if not isinstance(sphere, dict):
@@ -517,6 +590,37 @@ class ParticleDataFile:
         if (self.datasets["geometry/triangle_offsets"]["shape"] != [n[0] + 1]
                 or self.datasets["geometry/triangles"]["shape"][1:] != [3, 3]):
             raise ConversionError("Incorrect geometry array shape")
+        self._validate_force_schema(n[0])
+
+    def _validate_force_schema(self, n):
+        expected = {
+            "particles/fluid_force": ("<f8", [n, 3]),
+            "particles/fluid_torque": ("<f8", [n, 3]),
+            "particles/force_data_available": ("u1", [n]),
+            "contacts/particle_offsets": ("<u8", [n + 1]),
+            "contacts/wall_offsets": ("<u8", [n + 1]),
+        }
+        for kind, names in (("particle", ("partner_id", "normal_force", "tangential_force")),
+                            ("wall", ("contact_point", "normal_force", "tangential_force"))):
+            for name in names:
+                expected[f"contacts/{kind}_{name}"] = (
+                    "<i8" if name == "partner_id" else "<f8", None)
+        if not any(name in self.datasets for name in expected):
+            return
+        if not all(name in self.datasets for name in expected):
+            raise ConversionError("Incomplete optional force array schema")
+        for name, (dtype, shape) in expected.items():
+            item = self.datasets[name]
+            if item["dtype"] != dtype or (shape is not None and item["shape"] != shape):
+                raise ConversionError(f"Incorrect force array type or shape: {name}")
+        particle_shape = self.datasets["contacts/particle_partner_id"]["shape"]
+        wall_shape = self.datasets["contacts/wall_contact_point"]["shape"]
+        if len(particle_shape) != 1 or len(wall_shape) != 2 or wall_shape[1] != 3:
+            raise ConversionError("Incorrect contact array shape")
+        for kind, count in (("particle", particle_shape[0]), ("wall", wall_shape[0])):
+            for name in ("normal_force", "tangential_force"):
+                if self.datasets[f"contacts/{kind}_{name}"]["shape"] != [count, 3]:
+                    raise ConversionError(f"Incorrect {kind} contact force array shape")
 
     def _prepare_original_metadata(self):
         original = self.index["original"]
@@ -575,6 +679,20 @@ class ParticleDataFile:
                 digest.update(chunk)
             if digest.hexdigest() != item["sha256"]:
                 raise ConversionError(f"Dataset checksum mismatch: {name} in {self.path}")
+        if "particles/force_data_available" in self.datasets:
+            available = self.read_array("particles/force_data_available")
+            if any(value not in (0, 1) for value in available):
+                raise ConversionError("Invalid force availability flag")
+            for kind, count_name in (("particle", "particle_partner_id"),
+                                     ("wall", "wall_contact_point")):
+                offsets = self.read_array(f"contacts/{kind}_offsets")
+                count = self.datasets[f"contacts/{count_name}"]["shape"][0]
+                if (offsets[0] != 0 or offsets[-1] != count
+                        or any(a > b for a, b in zip(offsets, offsets[1:]))):
+                    raise ConversionError(f"Invalid {kind} contact offsets")
+                if any(not flag and offsets[i] != offsets[i + 1]
+                       for i, flag in enumerate(available)):
+                    raise ConversionError("Unavailable force output has contact rows")
         return True
 
     def read_array(self, name, start=0, stop=None):
@@ -715,7 +833,44 @@ def write_particles(writer):
     writer.write_array("particles/omega", [r["omega"] for r in records], "<f8")
     writer.write_array("particles/static", [r["static"] for r in records], "u1")
     writer.write_array("particles/time_steps_in_contact", [r["contact_steps"] for r in records], "<i8")
+    if any(r["has_force_fields"] for r in records):
+        write_force_arrays(writer, records)
     return n
+
+
+def write_force_arrays(writer, records):
+    """Add per-body force arrays and two variable-length, per-body contact tables."""
+    n = len(records)
+    for name in ("fluid_force", "fluid_torque"):
+        writer.write_array(f"particles/{name}",
+                           (v for r in records for v in r[name]), "<f8", (n, 3))
+    writer.write_array("particles/force_data_available",
+                       [r["force_data_available"] for r in records], "u1")
+    for kind in ("particle", "wall"):
+        key = f"{kind}_contacts"
+        offsets = [0]
+        for record in records:
+            offsets.append(offsets[-1] + len(record[key]))
+        writer.write_array(f"contacts/{kind}_offsets", offsets, "<u8")
+        if kind == "particle":
+            writer.write_array("contacts/particle_partner_id",
+                               (c["partner_id"] for r in records for c in r[key]), "<i8")
+        vector_fields = ("normal_force", "tangential_force")
+        if kind == "wall":
+            vector_fields = ("contact_point",) + vector_fields
+        for name in vector_fields:
+            writer.write_array(f"contacts/{kind}_{name}",
+                               (v for r in records for c in r[key] for v in c[name]),
+                               "<f8", (offsets[-1], 3))
+    writer.index["force_output"] = {
+        "version": 1, "force_unit": "N", "torque_unit": "N m",
+        "contact_point_unit": "m", "vector_convention": "force on owning particle",
+        "particle_contacts": "both ends stored; repeated partners may be subcontacts",
+        "availability": "0=unavailable, 1=completed solver snapshot; legacy records use NaN fluid vectors",
+        "fluid_force_definition": "FCoupling; buoyancy handled by effective gravity",
+        "normal_force_definition": "elastic plus clipped damping; excludes adhesion",
+        "sampling": "final DEM substep contacts; fluid coupling held during DEM",
+    }
 
 
 def finish_pending_deletions(bodies, data):

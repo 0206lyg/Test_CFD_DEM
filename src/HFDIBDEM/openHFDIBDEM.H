@@ -134,6 +134,16 @@ namespace Foam
     bool recordFirstTimeStep_ = false;
     word recordOutDir_;
 
+    // The force snapshot becomes valid only after a complete DEM update.
+    // Initial/restart output must not masquerade as a measured zero load.
+    label forceSnapshotTimeIndex_ = -1;
+
+    void collectContactOutput
+    (
+        List<dictionary>& particleContacts,
+        List<dictionary>& wallContacts
+    );
+
     vector movingWallPatchPlanePoint(const string& wallName) const;
 
     void setMovingWallsAtFraction(const scalar fraction);

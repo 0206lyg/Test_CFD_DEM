@@ -601,6 +601,8 @@ bool solvePrtContact(
     scalar deltaT
 )
 {
+    subCInfo.clearContactForces();
+
     getPrtContactVars(
         mesh,
         cInfo.getcClass(),
@@ -662,6 +664,10 @@ bool solvePrtContact(
 
     vector Ft = subCInfo.getFt(deltaT, cInfo.getMu()*mag(F));
     InfoH << parallelDEM_Info << "-- Particle-particle " <<subCInfo.getCPair().first() <<"-"<<subCInfo.getCPair().second() << " contact Ft " << Ft << endl;
+
+    // Cache the existing result: getFt() advances tangential history and must
+    // never be called again by output code.
+    subCInfo.setContactForces(F, Ft);
 
     F += Ft;
 

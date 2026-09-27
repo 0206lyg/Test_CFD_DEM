@@ -88,6 +88,11 @@ class prtSubContactInfo
 
     Tuple2<forces,forces> outForce_; // Out variable for force
 
+    // Components applied to contactPair_.first() in the latest force solve.
+    // The normal component includes clipped damping, but excludes adhesion.
+    vector normalForce_ = vector::zero;
+    vector tangentialForce_ = vector::zero;
+
     // Elastic tangential force history.  The instantaneous dashpot force is
     // deliberately not stored here.
     vector FtPrev_ = vector::zero;
@@ -153,6 +158,28 @@ class prtSubContactInfo
         return outForce_;
     }
 
+    const vector& getNormalForce() const
+    {
+        return normalForce_;
+    }
+
+    const vector& getTangentialForce() const
+    {
+        return tangentialForce_;
+    }
+
+    void setContactForces(const vector& normal, const vector& tangential)
+    {
+        normalForce_ = normal;
+        tangentialForce_ = tangential;
+    }
+
+    void clearContactForces()
+    {
+        normalForce_ = vector::zero;
+        tangentialForce_ = vector::zero;
+    }
+
     void setVMInfo(boundBox& bBox, scalar subVolumeV);
 
     void setVMInfo(const virtualMeshInfo& vmInfo);
@@ -165,6 +192,7 @@ class prtSubContactInfo
         outForce_.first().T = vector::zero;
         outForce_.second().F = vector::zero;
         outForce_.second().T = vector::zero;
+        clearContactForces();
     }
 
     bool contactResolved()
@@ -178,6 +206,16 @@ class prtSubContactInfo
     void setResolvedContact(bool resolved)
     {
         contactResolved_ = resolved;
+        if (!resolved)
+        {
+            clearContactForces();
+        }
+    }
+
+    // Local state for output gathered from the contact's owner rank only.
+    bool getContactResolved() const
+    {
+        return contactResolved_;
     }
 
     scalar& getLc()

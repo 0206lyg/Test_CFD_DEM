@@ -731,6 +731,8 @@ bool solveWallContact
     wallSubContactInfo& sCI
 )
 {
+    sCI.clearContactForces();
+
     getWallContactVars(
         mesh,
         wallCntInfo,
@@ -786,6 +788,9 @@ bool solveWallContact
     vector Ft = sCI.getFt(wallCntVar, deltaT, maxFt);
     InfoH << parallelDEM_Info << "-- Particle-wall body "<< sCI.getBodyId() <<" contact Ft " << Ft << endl;
     InfoH << parallelDEM_Info << "-- Particle-wall body "<< sCI.getBodyId() <<" contact Ft clamped " << Ft << endl;
+    // Preserve the computed, Coulomb-limited result without updating the
+    // tangential spring a second time during output.
+    sCI.setContactForces(F, Ft);
     F += Ft;
 
     vector FA = sCI.getFA(wallCntVar);
